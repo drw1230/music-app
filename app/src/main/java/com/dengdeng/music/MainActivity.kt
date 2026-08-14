@@ -31,14 +31,31 @@ class MainActivity : ComponentActivity() {
         if (granted) viewModel.scanMusic()
     }
 
+    /** Android 13+ 通知权限（通知栏媒体控制需要，拒绝不影响播放） */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* 拒绝则通知栏控制不可见，但不阻塞主流程 */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkAndRequestPermission()
+        requestNotificationPermissionIfNeeded()
         setContent {
             MusicAppTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     MainScreen(viewModel = viewModel, hasPermission = hasPermission)
                 }
+            }
+        }
+    }
+
+    /** Android 13+ 请求通知权限 */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
     }

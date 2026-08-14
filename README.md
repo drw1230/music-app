@@ -54,4 +54,5 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## 注意
 
-- 项目路径必须是纯英文（AGP 要求），所以放在 `C:\dev\music-app` 而不是坚果云目录
+- 项目路径必须是纯英文（AGP 要求），所以放在 `D:\dev\music-app` 而不是坚果云目录
+- 项目路径变更记录：`C:\dev\music-app` → `D:\dev\music-app`（2026-08-14）

@@ -55,6 +55,7 @@ dependencies {
     // Media3 播放器（谷歌官方，本地播放核心）
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
+    implementation("androidx.media3:media3-session:1.5.1")
 
     // Coil 图片加载（显示专辑封面）
     implementation("io.coil-kt:coil-compose:2.7.0")

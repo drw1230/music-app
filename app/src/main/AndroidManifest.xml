@@ -8,6 +8,8 @@
     <!-- 允许前台服务播放音乐 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 13+ 通知权限（通知栏媒体控制需要） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 网络权限（v2 联网补封面/歌词用） -->
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -24,6 +26,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 后台播放服务：前台服务 + 媒体会话 -->
+        <service
+            android:name=".player.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>
