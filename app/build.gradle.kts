@@ -1,6 +1,6 @@
 plugins {
     id("com.android.application")
-    // AGP 9 内置 Kotlin 支持，无需 kotlin-android 插件
+    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -31,15 +31,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     buildFeatures {
         compose = true
-    }
-}
-
-// AGP 9 内置 Kotlin 支持，用新 DSL 配置编译选项
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

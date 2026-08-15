@@ -616,7 +616,8 @@ private fun QueueSheet(
     viewModel: MusicViewModel,
     onDismiss: () -> Unit
 ) {
-    val songs = viewModel.songs
+    // 用当前显示列表（与播放队列一致，避免排序/搜索后索引错位）
+    val songs = viewModel.filteredSongs
     val currentIndex = viewModel.currentIndex
 
     ModalBottomSheet(

@@ -354,10 +354,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         return songs.filter { it.id in p.songIds }
     }
 
-    /** 根据 ID 集合播放歌单 */
+    /** 根据 ID 集合播放歌单（记录为当前播放队列） */
     fun playSongs(songs: List<Song>, startIndex: Int = 0) {
         if (songs.isEmpty()) return
         val ctrl = controller ?: return
+        activeQueue = songs
         val songInfos = songs.map { song ->
             PlaybackService.SongInfo(
                 id = song.id,
@@ -416,11 +417,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 点击播放某首歌（用整张列表作为播放队列） */
+    /** 点击播放某首歌（用当前显示的列表作为播放队列） */
     fun playSong(index: Int) {
-        val songList = songs
+        // 用 filteredSongs（当前显示列表）而非原始 songs，保证索引与 UI 一致
+        val songList = filteredSongs
         if (songList.isEmpty() || index !in songList.indices) return
         val ctrl = controller ?: return
+        activeQueue = songList
 
         val songInfos = songList.map { song ->
             PlaybackService.SongInfo(
@@ -446,9 +449,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (ctrl.isPlaying) ctrl.pause() else ctrl.play()
     }
 
-    /** 随机播放：从当前列表随机选一首开始播放 */
+    /** 随机播放：从当前显示列表随机选一首开始播放 */
     fun shufflePlay() {
-        val songList = songs
+        val songList = filteredSongs
         if (songList.isEmpty()) return
         val randomIndex = (0 until songList.size).random()
         playSong(randomIndex)
@@ -482,10 +485,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         controller?.seekTo(positionMs)
     }
 
-    /** 获取当前播放歌曲信息（供 UI 显示） */
+    /** 当前播放队列（playSong/playSongs 时记录，供 currentSong 精确取歌） */
+    private var activeQueue: List<Song> = emptyList()
+
+    /** 获取当前播放歌曲信息（供 UI 显示）—— 从实际播放队列取，避免索引错位 */
     fun currentSong(): Song? {
         val idx = currentIndex
-        return songs.getOrNull(idx)
+        return activeQueue.getOrNull(idx)
     }
 
     override fun onCleared() {
