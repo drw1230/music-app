@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import com.dengdeng.music.data.AlbumGroup
 import com.dengdeng.music.data.MusicRepository
 import com.dengdeng.music.data.Playlist
 import com.dengdeng.music.data.Song
@@ -66,6 +67,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun changeSortMode(mode: Int) {
         sortMode = mode
     }
+
+    // ==================== 专辑分组 ====================
+
+    /** 专辑列表（按专辑名分组，含封面/艺术家/歌曲数） */
+    val albums: List<AlbumGroup>
+        get() {
+            return songs.groupBy { it.albumId to it.album }
+                .values
+                .map { list ->
+                    val first = list.first()
+                    AlbumGroup(
+                        id = first.albumId,
+                        name = first.album,
+                        artist = list.firstOrNull { it.artist != "未知艺术家" }?.artist ?: first.artist,
+                        albumArtUri = first.albumArtUri,
+                        songs = list.sortedBy { it.trackNumber }
+                    )
+                }
+                .sortedBy { it.name.lowercase() }
+        }
 
     // ==================== 播放历史 ====================
 

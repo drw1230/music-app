@@ -14,5 +14,6 @@ data class Song(
     val durationMs: Long,       // 时长（毫秒）
     val uri: Uri,               // 音频文件地址
     val albumArtUri: Uri?,      // 封面地址（可为空）
-    val trackNumber: Int = 0    // 专辑内曲目序号
+    val trackNumber: Int = 0,   // 专辑内曲目序号
+    val albumId: Long = -1      // 专辑 ID（分组用）
 )

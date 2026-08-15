@@ -118,7 +118,8 @@ object MusicRepository {
                         durationMs = duration,
                         uri = contentUri,
                         albumArtUri = albumArtUri,
-                        trackNumber = track
+                        trackNumber = track,
+                        albumId = albumId
                     )
                 )
             }

@@ -13,12 +13,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Equalizer
@@ -54,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
+import com.dengdeng.music.data.LyricParser
 import com.dengdeng.music.data.Song
 import androidx.media3.common.Player
 import kotlinx.coroutines.launch
@@ -76,6 +81,8 @@ fun PlayerScreen(
     }
 
     var showQueue by remember { mutableStateOf(false) }
+    // 封面/歌词切换状态
+    var showLyrics by remember { mutableStateOf(false) }
     // 收藏状态从 ViewModel 读取（持久化），切歌时刷新
     val isFavorite = viewModel.isFavorite(song.id)
 
@@ -225,13 +232,35 @@ fun PlayerScreen(
 
             Spacer(Modifier.weight(1f))
 
-            // 旋转封面（带光晕，切歌淡入淡出）
-            Crossfade(
-                targetState = song.id,
-                animationSpec = tween(durationMillis = 400),
-                label = "album-crossfade"
-            ) { _ ->
-                RotatingAlbumArt(song = song, isPlaying = viewModel.isPlaying)
+            // 封面 / 歌词切换（点击封面切换显示）
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clickable { showLyrics = !showLyrics }
+            ) {
+                Crossfade(
+                    targetState = showLyrics,
+                    animationSpec = tween(durationMillis = 300),
+                    label = "cover-lyrics"
+                ) { isLyrics ->
+                    if (isLyrics) {
+                        LyricsView(
+                            viewModel = viewModel,
+                            song = song,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        // 旋转封面（带光晕，切歌淡入淡出）
+                        Crossfade(
+                            targetState = song.id,
+                            animationSpec = tween(durationMillis = 400),
+                            label = "album-crossfade"
+                        ) { _ ->
+                            RotatingAlbumArt(song = song, isPlaying = viewModel.isPlaying)
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -362,6 +391,90 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean) {
                 .clip(CircleShape)
                 .background(Color.White.copy(alpha = 0.35f))
         )
+    }
+}
+
+/** 歌词视图：加载 .lrc 歌词 + 滚动跟随当前行高亮 */
+@Composable
+private fun LyricsView(
+    viewModel: MusicViewModel,
+    song: Song,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val listState = rememberLazyListState()
+
+    // 歌词数据（切歌时重新加载）
+    var lyrics by remember(song.id) { mutableStateOf<List<LyricParser.LyricLine>>(emptyList()) }
+    var loading by remember(song.id) { mutableStateOf(true) }
+
+    LaunchedEffect(song.id) {
+        loading = true
+        lyrics = LyricParser.loadLyrics(context, song.uri, song.title)
+        loading = false
+    }
+
+    // 无歌词提示
+    if (!loading && lyrics.isEmpty()) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                "暂无歌词\n（点击封面返回）",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.6f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+        return
+    }
+
+    // 当前播放进度
+    val positionMs = viewModel.currentPositionMs
+
+    // 计算当前行索引：最后一行 timeMs <= 当前进度
+    val currentIndex = remember(lyrics, positionMs) {
+        val idx = lyrics.indexOfLast { it.timeMs <= positionMs }
+        if (idx < 0) 0 else idx
+    }
+
+    // 滚动跟随当前行（居中）
+    LaunchedEffect(currentIndex) {
+        if (lyrics.isNotEmpty()) {
+            listState.animateScrollToItem(
+                index = (currentIndex - 1).coerceAtLeast(0),
+                scrollOffset = -listState.layoutInfo.viewportEndOffset / 2
+            )
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 120.dp)
+    ) {
+        itemsIndexed(lyrics) { index, line ->
+            val isCurrent = index == currentIndex
+            Text(
+                text = line.text,
+                style = if (isCurrent) {
+                    MaterialTheme.typography.titleMedium
+                } else {
+                    MaterialTheme.typography.bodyLarge
+                },
+                fontWeight = if (isCurrent) androidx.compose.ui.text.font.FontWeight.Bold
+                else androidx.compose.ui.text.font.FontWeight.Normal,
+                color = if (isCurrent) Color.White else Color.White.copy(alpha = 0.5f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        viewModel.seekTo(line.timeMs)
+                    },
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
     }
 }
 
