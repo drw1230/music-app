@@ -18,11 +18,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -33,6 +38,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -63,7 +70,9 @@ import com.dengdeng.music.data.Song
 fun MainScreen(
     viewModel: MusicViewModel,
     hasPermission: Boolean,
-    onDeleteSongs: (List<android.net.Uri>) -> Unit
+    onDeleteSongs: (List<android.net.Uri>) -> Unit,
+    themeMode: Int,
+    onThemeModeChange: (Int) -> Unit
 ) {
     // 是否显示全屏播放页
     var showPlayer by remember { mutableStateOf(false) }
@@ -73,6 +82,16 @@ fun MainScreen(
     var viewingPlaylist by remember { mutableStateOf<Playlist?>(null) }
     // 待添加到歌单的歌曲 ID（非 null 时显示选择弹窗）
     var songForPlaylist by remember { mutableStateOf<Long?>(null) }
+    // 右上角更多菜单
+    var menuExpanded by remember { mutableStateOf(false) }
+    // 排序菜单
+    var sortMenuExpanded by remember { mutableStateOf(false) }
+    // 睡眠定时器弹窗
+    var showSleepTimer by remember { mutableStateOf(false) }
+    // 播放历史弹窗
+    var showHistory by remember { mutableStateOf(false) }
+    // 关于弹窗
+    var showAbout by remember { mutableStateOf(false) }
 
     if (showPlayer) {
         // 播放页打开时，安卓返回键先关闭播放页回到曲库（再按返回键才退出 App）
@@ -86,8 +105,75 @@ fun MainScreen(
             TopAppBar(
                 title = { Text("DDmusic") },
                 actions = {
-                    IconButton(onClick = { viewModel.scanMusic() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "重新扫描")
+                    // 右上角更多菜单
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            // 刷新扫描
+                            DropdownMenuItem(
+                                text = { Text("刷新扫描") },
+                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    viewModel.scanMusic()
+                                }
+                            )
+                            // 排序（带二级菜单）
+                            DropdownMenuItem(
+                                text = { Text("排序") },
+                                leadingIcon = { Icon(Icons.Default.Sort, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    sortMenuExpanded = true
+                                }
+                            )
+                            // 播放历史&排行
+                            DropdownMenuItem(
+                                text = { Text("播放历史与排行") },
+                                leadingIcon = { Icon(Icons.Default.History, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    showHistory = true
+                                }
+                            )
+                            // 睡眠定时器
+                            DropdownMenuItem(
+                                text = { Text("睡眠定时器") },
+                                leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    showSleepTimer = true
+                                }
+                            )
+                            // 深色主题切换
+                            DropdownMenuItem(
+                                text = { Text("深色模式") },
+                                leadingIcon = {
+                                    Icon(
+                                        if (themeMode != 0) Icons.Default.DarkMode else Icons.Default.LightMode,
+                                        contentDescription = null
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onThemeModeChange(if (themeMode == 0) 2 else 0)
+                                }
+                            )
+                            // 关于
+                            DropdownMenuItem(
+                                text = { Text("关于 DDmusic") },
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    showAbout = true
+                                }
+                            )
+                        }
                     }
                 }
             )
@@ -160,6 +246,75 @@ fun MainScreen(
                 }
             }
         }
+    }
+
+    // ===== 右上角菜单触发的弹窗 =====
+
+    // 排序菜单（AlertDialog 形式）
+    if (sortMenuExpanded) {
+        val sortNames = listOf("按歌名", "按艺术家", "按时长")
+        AlertDialog(
+            onDismissRequest = { sortMenuExpanded = false },
+            title = { Text("排序方式") },
+            text = {
+                Column {
+                    sortNames.forEachIndexed { index, name ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.changeSortMode(index)
+                                    sortMenuExpanded = false
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (viewModel.sortMode == index) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (viewModel.sortMode == index) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { sortMenuExpanded = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 睡眠定时器弹窗
+    if (showSleepTimer) {
+        SleepTimerDialog(
+            viewModel = viewModel,
+            onDismiss = { showSleepTimer = false }
+        )
+    }
+
+    // 播放历史弹窗
+    if (showHistory) {
+        HistorySheet(
+            viewModel = viewModel,
+            onDismiss = { showHistory = false }
+        )
+    }
+
+    // 关于弹窗
+    if (showAbout) {
+        AboutDialog(onDismiss = { showAbout = false })
     }
 }
 
@@ -1095,4 +1250,234 @@ private fun formatDuration(durationMs: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
+}
+
+/** 睡眠定时器弹窗 */
+@Composable
+private fun SleepTimerDialog(
+    viewModel: MusicViewModel,
+    onDismiss: () -> Unit
+) {
+    val remaining = viewModel.sleepTimerRemaining
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("睡眠定时器") },
+        text = {
+            Column {
+                if (remaining > 0) {
+                    Text(
+                        "剩余 ${remaining / 60} 分 ${remaining % 60} 秒后自动暂停",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { viewModel.cancelSleepTimer() }) {
+                        Text("取消定时", color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    Text(
+                        "设定时间后自动暂停播放",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(15, 30, 60).forEach { minutes ->
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.startSleepTimer(minutes)
+                                onDismiss()
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("$minutes 分钟")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
+}
+
+/** 播放历史 + 排行弹窗 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistorySheet(
+    viewModel: MusicViewModel,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            Text(
+                "最近播放",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            val recent = viewModel.recentSongs
+            if (recent.isEmpty()) {
+                Text(
+                    "还没有播放记录",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+            } else {
+                recent.take(20).forEachIndexed { index, song ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.playSongs(recent, index)
+                                onDismiss()
+                            }
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(song.albumArtUri ?: song.uri)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                song.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                song.artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        // 播放次数
+                        val count = viewModel.playHistory[song.id] ?: 0
+                        Text(
+                            "$count 次",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+
+            Text(
+                "播放排行",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            val top = viewModel.topPlayedSongs
+            if (top.isEmpty()) {
+                Text(
+                    "暂无排行数据",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+            } else {
+                top.take(10).forEachIndexed { index, (song, count) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.playSongs(top.map { it.first }, index)
+                                onDismiss()
+                            }
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${index + 1}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (index < 3) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(28.dp)
+                        )
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(song.albumArtUri ?: song.uri)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                song.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                song.artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            "$count 次",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 关于弹窗 */
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("关于 DDmusic") },
+        text = {
+            Column {
+                Text("DDmusic", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "版本 0.3.2",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "本地音乐播放器\n• 智能扫描本地音乐\n• 我的歌单 / 喜欢\n• 睡眠定时 / 播放排行\n• 深色主题",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("好的") }
+        }
+    )
 }

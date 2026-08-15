@@ -38,18 +38,88 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 搜索关键词（空表示不搜索） */
     var searchQuery by mutableStateOf("")
 
-    /** 搜索结果（按关键词过滤后的歌曲） */
+    /** 排序方式：0=歌名 1=艺术家 2=时长 3=最近添加 */
+    var sortMode by mutableStateOf(0)
+
+    /** 搜索结果（按关键词过滤 + 排序后的歌曲） */
     val filteredSongs: List<Song>
         get() {
             val q = searchQuery.trim()
-            if (q.isEmpty()) return songs
-            val lower = q.lowercase()
-            return songs.filter {
-                it.title.lowercase().contains(lower) ||
-                it.artist.lowercase().contains(lower) ||
-                it.album.lowercase().contains(lower)
+            val filtered = if (q.isEmpty()) {
+                songs
+            } else {
+                val lower = q.lowercase()
+                songs.filter {
+                    it.title.lowercase().contains(lower) ||
+                    it.artist.lowercase().contains(lower) ||
+                    it.album.lowercase().contains(lower)
+                }
+            }
+            return when (sortMode) {
+                1 -> filtered.sortedBy { it.artist.lowercase() }
+                2 -> filtered.sortedByDescending { it.durationMs }
+                else -> filtered.sortedBy { it.title.lowercase() }
             }
         }
+
+    /** 设置排序方式 */
+    fun changeSortMode(mode: Int) {
+        sortMode = mode
+    }
+
+    // ==================== 播放历史 ====================
+
+    /** 播放历史：歌曲 ID -> 播放次数（LinkedHashMap 保持顺序） */
+    var playHistory by mutableStateOf<Map<Long, Int>>(emptyMap())
+        private set
+
+    /** 记录一次播放（切换歌曲时调用） */
+    fun recordPlay(songId: Long) {
+        playHistory = playHistory + (songId to (playHistory[songId] ?: 0) + 1)
+    }
+
+    /** 最近播放的歌曲列表（按历史顺序倒序） */
+    val recentSongs: List<Song>
+        get() = playHistory.keys.reversed()
+            .mapNotNull { id -> songs.firstOrNull { it.id == id } }
+
+    /** 播放次数排行（按次数倒序） */
+    val topPlayedSongs: List<Pair<Song, Int>>
+        get() = playHistory.entries
+            .sortedByDescending { it.value }
+            .mapNotNull { entry ->
+                songs.firstOrNull { it.id == entry.key }?.let { it to entry.value }
+            }
+
+    // ==================== 睡眠定时器 ====================
+
+    /** 睡眠定时剩余秒数（0 = 未开启） */
+    var sleepTimerRemaining by mutableStateOf(0L)
+        private set
+
+    /** 睡眠定时任务 */
+    private var sleepJob: Job? = null
+
+    /** 启动睡眠定时器（分钟） */
+    fun startSleepTimer(minutes: Int) {
+        sleepJob?.cancel()
+        sleepTimerRemaining = minutes * 60L
+        sleepJob = viewModelScope.launch {
+            while (sleepTimerRemaining > 0) {
+                delay(1000)
+                sleepTimerRemaining--
+            }
+            // 时间到，暂停播放
+            controller?.pause()
+        }
+    }
+
+    /** 取消睡眠定时器 */
+    fun cancelSleepTimer() {
+        sleepJob?.cancel()
+        sleepJob = null
+        sleepTimerRemaining = 0L
+    }
 
     /** 是否正在扫描 */
     var isLoading by mutableStateOf(false)
@@ -103,6 +173,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             currentIndex = controller?.currentMediaItemIndex ?: -1
             syncDuration()
+            // 记录播放历史（切歌/开始播放时）
+            mediaItem?.mediaId?.toLongOrNull()?.let { recordPlay(it) }
         }
 
         override fun onRepeatModeChanged(repeatMode: Int) {
@@ -267,6 +339,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val ctrl = controller ?: return
         val songInfos = songs.map { song ->
             PlaybackService.SongInfo(
+                id = song.id,
                 title = song.title,
                 artist = song.artist,
                 album = song.album,
@@ -286,6 +359,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val song = songs.firstOrNull { it.id == songId } ?: return
         val ctrl = controller ?: return
         val songInfo = PlaybackService.SongInfo(
+            id = song.id,
             title = song.title,
             artist = song.artist,
             album = song.album,
@@ -329,6 +403,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
         val songInfos = songList.map { song ->
             PlaybackService.SongInfo(
+                id = song.id,
                 title = song.title,
                 artist = song.artist,
                 album = song.album,

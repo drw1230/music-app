@@ -1,6 +1,7 @@
 package com.dengdeng.music
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -9,15 +10,28 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import com.dengdeng.music.ui.MainScreen
 import com.dengdeng.music.ui.MusicViewModel
 import com.dengdeng.music.ui.theme.MusicAppTheme
+import kotlinx.coroutines.launch
+
+/** DataStore 扩展属性（主题设置） */
+private val Context.themeDataStore: DataStore<Preferences> by preferencesDataStore(name = "theme_prefs")
 
 class MainActivity : ComponentActivity() {
 
@@ -60,12 +74,36 @@ class MainActivity : ComponentActivity() {
         checkAndRequestPermission()
         requestNotificationPermissionIfNeeded()
         setContent {
-            MusicAppTheme {
+            // 主题模式：0=跟随系统 1=亮色 2=暗色（DataStore 持久化）
+            var themeMode by remember { mutableStateOf(0) }
+            val scope = rememberCoroutineScope()
+            LaunchedEffect(Unit) {
+                themeDataStore.data.collect { prefs ->
+                    themeMode = prefs[intPreferencesKey("theme_mode")] ?: 0
+                }
+            }
+            fun saveThemeMode(mode: Int) {
+                themeMode = mode
+                scope.launch {
+                    themeDataStore.edit { prefs ->
+                        prefs[intPreferencesKey("theme_mode")] = mode
+                    }
+                }
+            }
+
+            val darkTheme = when (themeMode) {
+                1 -> false
+                2 -> true
+                else -> isSystemInDarkTheme()
+            }
+            MusicAppTheme(darkTheme = darkTheme) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     MainScreen(
                         viewModel = viewModel,
                         hasPermission = hasPermission,
-                        onDeleteSongs = { requestDeleteSongs(it) }
+                        onDeleteSongs = { requestDeleteSongs(it) },
+                        themeMode = themeMode,
+                        onThemeModeChange = { saveThemeMode(it) }
                     )
                 }
             }

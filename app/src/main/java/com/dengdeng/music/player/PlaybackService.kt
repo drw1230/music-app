@@ -47,6 +47,7 @@ class PlaybackService : MediaSessionService() {
         fun buildMediaItems(songs: List<SongInfo>): List<MediaItem> {
             return songs.map { song ->
                 MediaItem.Builder()
+                    .setMediaId(song.id.toString())
                     .setUri(song.uri)
                     .setMediaMetadata(
                         androidx.media3.common.MediaMetadata.Builder()
@@ -63,6 +64,7 @@ class PlaybackService : MediaSessionService() {
 
     /** 简化歌曲信息，供 UI 层传递 */
     data class SongInfo(
+        val id: Long,
         val title: String,
         val artist: String,
         val album: String,
