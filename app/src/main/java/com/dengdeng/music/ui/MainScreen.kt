@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -65,6 +66,8 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
     var viewingPlaylist by remember { mutableStateOf<Playlist?>(null) }
     // 待添加到歌单的歌曲 ID（非 null 时显示选择弹窗）
     var songForPlaylist by remember { mutableStateOf<Long?>(null) }
+    // 长按选中的歌曲（非 null 时显示操作菜单）
+    var songMenu by remember { mutableStateOf<Song?>(null) }
 
     if (showPlayer) {
         // 播放页打开时，安卓返回键先关闭播放页回到曲库（再按返回键才退出 App）
@@ -118,13 +121,15 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
                     when (selectedTab) {
                         1 -> FavoriteList(
                             viewModel = viewModel,
-                            onAddToPlaylist = { songForPlaylist = it }
+                            onAddToPlaylist = { songForPlaylist = it },
+                            onSongLongPress = { songMenu = it }
                         )
                         2 -> if (viewingPlaylist != null) {
                             PlaylistDetail(
                                 viewModel = viewModel,
                                 playlist = viewingPlaylist!!,
-                                onAddToPlaylist = { songForPlaylist = it }
+                                onAddToPlaylist = { songForPlaylist = it },
+                                onSongLongPress = { songMenu = it }
                             )
                         } else {
                             PlaylistList(
@@ -134,7 +139,8 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
                         }
                         else -> SongList(
                             viewModel = viewModel,
-                            onAddToPlaylist = { songForPlaylist = it }
+                            onAddToPlaylist = { songForPlaylist = it },
+                            onSongLongPress = { songMenu = it }
                         )
                     }
                 }
@@ -145,6 +151,19 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
                         viewModel = viewModel,
                         songId = songId,
                         onDismiss = { songForPlaylist = null }
+                    )
+                }
+
+                // 长按歌曲操作菜单
+                songMenu?.let { song ->
+                    SongActionSheet(
+                        viewModel = viewModel,
+                        song = song,
+                        onDismiss = { songMenu = null },
+                        onAddToPlaylist = {
+                            songMenu = null
+                            songForPlaylist = song.id
+                        }
                     )
                 }
             }
@@ -161,7 +180,7 @@ private fun LibraryTabs(selected: Int, onSelect: (Int) -> Unit) {
             .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        listOf("全部", "收藏", "歌单").forEachIndexed { index, label ->
+        listOf("全部", "喜欢", "歌单").forEachIndexed { index, label ->
             val isSelected = selected == index
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -225,7 +244,11 @@ private fun PlaylistDetailHeader(
 
 /** 全部歌曲列表（带搜索框） */
 @Composable
-private fun SongList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> Unit) {
+private fun SongList(
+    viewModel: MusicViewModel,
+    onAddToPlaylist: (Long) -> Unit,
+    onSongLongPress: (Song) -> Unit
+) {
     val songs = viewModel.filteredSongs
     val totalDuration = songs.sumOf { it.durationMs }
     val totalMinutes = totalDuration / 60_000
@@ -281,15 +304,20 @@ private fun SongList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> Unit)
                 isPlaying = viewModel.isPlaying && index == viewModel.currentIndex,
                 isFavorite = viewModel.isFavorite(song.id),
                 onClick = { viewModel.playSong(index) },
+                onLongPress = { onSongLongPress(song) },
                 onAddToPlaylist = { onAddToPlaylist(song.id) }
             )
         }
     }
 }
 
-/** 收藏歌曲列表 */
+/** 喜欢歌曲列表 */
 @Composable
-private fun FavoriteList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> Unit) {
+private fun FavoriteList(
+    viewModel: MusicViewModel,
+    onAddToPlaylist: (Long) -> Unit,
+    onSongLongPress: (Song) -> Unit
+) {
     val favorites = viewModel.favoriteSongs
     if (favorites.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -302,12 +330,12 @@ private fun FavoriteList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> U
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "还没有收藏歌曲",
+                    "还没有喜欢的歌曲",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    "播放页点 ♡ 收藏喜欢的歌",
+                    "播放页点 ♡ 喜欢喜欢的歌",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
@@ -331,7 +359,7 @@ private fun FavoriteList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> U
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "我的收藏（${favorites.size}）",
+                    "我喜欢（${favorites.size}）",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -345,6 +373,7 @@ private fun FavoriteList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> U
                 isPlaying = viewModel.isPlaying && song.id == viewModel.currentSong()?.id,
                 isFavorite = true,
                 onClick = { viewModel.playSongs(favorites, index) },
+                onLongPress = { onSongLongPress(song) },
                 onAddToPlaylist = { onAddToPlaylist(song.id) }
             )
         }
@@ -499,7 +528,8 @@ private fun PlaylistList(
 private fun PlaylistDetail(
     viewModel: MusicViewModel,
     playlist: Playlist,
-    onAddToPlaylist: (Long) -> Unit
+    onAddToPlaylist: (Long) -> Unit,
+    onSongLongPress: (Song) -> Unit
 ) {
     val songs = viewModel.songsOfPlaylist(playlist.id)
     if (songs.isEmpty()) {
@@ -522,6 +552,7 @@ private fun PlaylistDetail(
                 isPlaying = viewModel.isPlaying && song.id == viewModel.currentSong()?.id,
                 isFavorite = viewModel.isFavorite(song.id),
                 onClick = { viewModel.playSongs(songs, index) },
+                onLongPress = { onSongLongPress(song) },
                 onAddToPlaylist = { onAddToPlaylist(song.id) }
             )
         }
@@ -610,6 +641,126 @@ private fun AddToPlaylistSheet(
     }
 }
 
+/** 长按歌曲弹出的操作菜单（参考主流音乐 App） */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SongActionSheet(
+    viewModel: MusicViewModel,
+    song: Song,
+    onDismiss: () -> Unit,
+    onAddToPlaylist: () -> Unit
+) {
+    val isLiked = viewModel.isFavorite(song.id)
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            // 歌曲信息头
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(song.albumArtUri ?: song.uri)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = song.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = song.artist,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+
+            // 菜单项：播放
+            SongActionItem(
+                icon = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                label = "播放",
+                onClick = {
+                    val idx = viewModel.songs.indexOfFirst { it.id == song.id }
+                    if (idx >= 0) viewModel.playSong(idx)
+                    onDismiss()
+                }
+            )
+            // 菜单项：下一首播放
+            SongActionItem(
+                icon = { Icon(Icons.Default.SkipNext, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                label = "下一首播放",
+                onClick = {
+                    viewModel.playNext(song.id)
+                    onDismiss()
+                }
+            )
+            // 菜单项：喜欢 / 取消喜欢
+            SongActionItem(
+                icon = {
+                    Icon(
+                        if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = null,
+                        tint = if (isLiked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    )
+                },
+                label = if (isLiked) "取消喜欢" else "喜欢",
+                onClick = {
+                    viewModel.toggleFavorite(song.id)
+                    onDismiss()
+                }
+            )
+            // 菜单项：添加到歌单
+            SongActionItem(
+                icon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                label = "添加到歌单",
+                onClick = onAddToPlaylist
+            )
+        }
+    }
+}
+
+/** 操作菜单单项：图标 + 文字，整行可点 */
+@Composable
+private fun SongActionItem(
+    icon: @Composable () -> Unit,
+    label: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        icon()
+        Spacer(Modifier.width(16.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge
+        )
+    }
+}
+
 /** 曲库头部统计 */
 @Composable
 private fun LibraryHeader(
@@ -671,7 +822,8 @@ private fun formatTotalMinutes(minutes: Long): String {
     }
 }
 
-/** 单行歌曲 */
+/** 单行歌曲（支持点击播放 + 长按弹出操作菜单） */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SongRow(
     song: Song,
@@ -680,12 +832,16 @@ private fun SongRow(
     isPlaying: Boolean,
     isFavorite: Boolean,
     onClick: () -> Unit,
+    onLongPress: () -> Unit,
     onAddToPlaylist: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongPress
+            )
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

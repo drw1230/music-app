@@ -281,6 +281,33 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         ctrl.play()
     }
 
+    /** 下一首播放：把歌曲插入到当前播放位置之后，不打断当前播放 */
+    fun playNext(songId: Long) {
+        val song = songs.firstOrNull { it.id == songId } ?: return
+        val ctrl = controller ?: return
+        val songInfo = PlaybackService.SongInfo(
+            title = song.title,
+            artist = song.artist,
+            album = song.album,
+            uri = song.uri.toString(),
+            albumArtUri = song.albumArtUri?.toString(),
+            durationMs = song.durationMs
+        )
+        val mediaItem = PlaybackService.buildMediaItems(listOf(songInfo)).first()
+
+        val currentIndex = ctrl.currentMediaItemIndex
+        val insertAt = currentIndex + 1
+        // 如果这首歌已经在队列里，先移除再插到当前位置（避免重复）
+        val existingIndex = (0 until ctrl.mediaItemCount).firstOrNull { i ->
+            ctrl.getMediaItemAt(i).mediaId == mediaItem.mediaId
+        }
+        if (existingIndex != null) {
+            ctrl.removeMediaItem(existingIndex)
+        }
+        val finalIndex = if (existingIndex != null && existingIndex <= insertAt) insertAt - 1 else insertAt
+        ctrl.addMediaItem(finalIndex.coerceAtLeast(0), mediaItem)
+    }
+
     /** 扫描本地音乐 */
     fun scanMusic() {
         val context = getApplication<Application>()
