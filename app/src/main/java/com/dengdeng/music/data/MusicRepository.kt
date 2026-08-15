@@ -26,7 +26,8 @@ object MusicRepository {
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.TRACK
+            MediaStore.Audio.Media.TRACK,
+            MediaStore.Audio.Media.ALBUM_ID
         )
 
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
@@ -45,6 +46,7 @@ object MusicRepository {
             val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
             val trackCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
+            val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -53,6 +55,7 @@ object MusicRepository {
                 val album = cursor.getString(albumCol) ?: "未知专辑"
                 val duration = cursor.getLong(durationCol)
                 val track = cursor.getInt(trackCol)
+                val albumId = cursor.getLong(albumIdCol)
 
                 // 过滤掉 0 时长的异常文件（如铃声、系统提示音）
                 if (duration < 1000) continue
@@ -60,7 +63,14 @@ object MusicRepository {
                 val contentUri = ContentUris.withAppendedId(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id
                 )
-                val albumArtUri = getAlbumArtUri(context, album)
+                // 直接用专辑 ID 构造封面地址（Android 16 不允许用专辑名字符串查询，会抛 Invalid token album）
+                val albumArtUri = if (albumId >= 0) {
+                    ContentUris.withAppendedId(
+                        Uri.parse("content://media/external/audio/albumart"), albumId
+                    )
+                } else {
+                    null
+                }
 
                 songs.add(
                     Song(
@@ -77,27 +87,5 @@ object MusicRepository {
             }
         }
         return songs
-    }
-
-    /**
-     * 通过专辑名查询封面地址
-     * MediaStore 的专辑表里存有封面 ID，查不到返回 null
-     */
-    private fun getAlbumArtUri(context: Context, album: String): Uri? {
-        if (album.isEmpty() || album == "未知专辑") return null
-        val albumArtUri = Uri.parse("content://media/external/audio/albumart")
-        val projection = arrayOf(MediaStore.Audio.Albums.ALBUM_ID)
-        val selection = "${MediaStore.Audio.Albums.ALBUM} = ?"
-        val selectionArgs = arrayOf(album)
-
-        context.contentResolver.query(
-            albumArtUri, projection, selection, selectionArgs, null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val albumId = cursor.getLong(0)
-                return ContentUris.withAppendedId(albumArtUri, albumId)
-            }
-        }
-        return null
     }
 }
