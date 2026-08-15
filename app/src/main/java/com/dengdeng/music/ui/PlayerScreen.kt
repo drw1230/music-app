@@ -1,14 +1,18 @@
 package com.dengdeng.music.ui
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,7 +44,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,6 +56,8 @@ import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import com.dengdeng.music.data.Song
 import androidx.media3.common.Player
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * 全屏播放页 —— v1 的门面（升级版）
@@ -71,7 +80,81 @@ fun PlayerScreen(
 
     val albumArt = song.albumArtUri ?: song.uri
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // ===== 下滑/左滑返回手势 =====
+    val scope = rememberCoroutineScope()
+    // 当前拖动位移（x 为水平位移，y 为垂直位移）
+    val dragX = remember { Animatable(0f) }
+    val dragY = remember { Animatable(0f) }
+    // 触发关闭的阈值（dp）
+    val dismissThreshold = with(LocalDensity.current) { 160.dp.toPx() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // 跟手位移 + 透明度渐变（滑得越多越透明）
+            .graphicsLayer {
+                translationX = dragX.value
+                translationY = dragY.value
+                alpha = 1f - (abs(dragX.value) + abs(dragY.value)) / (dismissThreshold * 3f)
+            }
+            // 手势：水平拖动（左/右滑）或垂直下滑
+            .pointerInput(dismissThreshold) {
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        scope.launch { dragX.snapTo(dragX.value + dragAmount) }
+                    },
+                    onDragEnd = {
+                        scope.launch {
+                            if (abs(dragX.value) > dismissThreshold) {
+                                // 滑出屏幕后关闭
+                                dragX.animateTo(
+                                    if (dragX.value > 0) 1200f else -1200f,
+                                    animationSpec = tween(200)
+                                )
+                                onClose()
+                            } else {
+                                // 回弹
+                                dragX.animateTo(0f, animationSpec = spring())
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        scope.launch {
+                            dragX.animateTo(0f, animationSpec = spring())
+                            dragY.animateTo(0f, animationSpec = spring())
+                        }
+                    }
+                )
+            }
+            .pointerInput(dismissThreshold) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        scope.launch { dragY.snapTo(dragY.value + dragAmount) }
+                    },
+                    onDragEnd = {
+                        scope.launch {
+                            if (dragY.value > dismissThreshold) {
+                                dragY.animateTo(
+                                    1600f,
+                                    animationSpec = tween(200)
+                                )
+                                onClose()
+                            } else {
+                                dragY.animateTo(0f, animationSpec = spring())
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        scope.launch {
+                            dragX.animateTo(0f, animationSpec = spring())
+                            dragY.animateTo(0f, animationSpec = spring())
+                        }
+                    }
+                )
+            }
+    ) {
         // ===== 模糊封面背景（动态沉浸感）=====
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
