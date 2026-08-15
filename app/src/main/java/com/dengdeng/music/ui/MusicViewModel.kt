@@ -114,16 +114,43 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 切换循环模式：顺序 → 单曲 → 全部 → 顺序 */
+    /** 切换循环模式：顺序 → 列表循环 → 单曲循环 → 乱序 → 顺序 */
     fun cycleRepeatMode() {
         val ctrl = controller ?: return
         val next = when (ctrl.repeatMode) {
-            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ONE
-            Player.REPEAT_MODE_ONE -> Player.REPEAT_MODE_ALL
-            else -> Player.REPEAT_MODE_OFF
+            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL       // 顺序 → 列表循环
+            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE       // 列表循环 → 单曲循环
+            Player.REPEAT_MODE_ONE -> REPEAT_MODE_SHUFFLE          // 单曲循环 → 乱序
+            else -> Player.REPEAT_MODE_OFF                          // 乱序 → 顺序
         }
-        ctrl.repeatMode = next
-        repeatMode = next
+        applyRepeatMode(next)
+    }
+
+    /** 应用循环模式（也处理乱序——基于 Media3 的 shuffleModeEnabled） */
+    private fun applyRepeatMode(mode: Int) {
+        val ctrl = controller ?: return
+        when (mode) {
+            REPEAT_MODE_SHUFFLE -> {
+                ctrl.shuffleModeEnabled = true
+                ctrl.repeatMode = Player.REPEAT_MODE_OFF
+            }
+            else -> {
+                ctrl.shuffleModeEnabled = false
+                ctrl.repeatMode = mode
+            }
+        }
+        repeatMode = mode
+    }
+
+    /** ViewModel 启动时同步一次模式（兜底） */
+    private fun syncModeFromController() {
+        val ctrl = controller ?: return
+        repeatMode = if (ctrl.shuffleModeEnabled) REPEAT_MODE_SHUFFLE else ctrl.repeatMode
+    }
+
+    companion object {
+        /** 自定义循环模式：乱序（Media3 没有 REPEAT_MODE_SHUFFLE，用一个非常量值表示） */
+        const val REPEAT_MODE_SHUFFLE = 99
     }
 
     /** 扫描本地音乐 */

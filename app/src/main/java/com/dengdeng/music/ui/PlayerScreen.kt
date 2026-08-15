@@ -384,7 +384,7 @@ private fun PlayerControls(viewModel: MusicViewModel) {
 
         Spacer(Modifier.height(14.dp))
 
-        // 循环模式切换
+        // 循环模式切换：顺序 → 列表循环 → 单曲循环 → 乱序
         IconButton(onClick = { viewModel.cycleRepeatMode() }) {
             when (viewModel.repeatMode) {
                 Player.REPEAT_MODE_ONE -> Icon(
@@ -395,6 +395,11 @@ private fun PlayerControls(viewModel: MusicViewModel) {
                 Player.REPEAT_MODE_ALL -> Icon(
                     imageVector = Icons.Default.Repeat,
                     contentDescription = "列表循环",
+                    tint = Color.White
+                )
+                MusicViewModel.REPEAT_MODE_SHUFFLE -> Icon(
+                    imageVector = Icons.Default.Shuffle,
+                    contentDescription = "乱序播放",
                     tint = Color.White
                 )
                 else -> Icon(

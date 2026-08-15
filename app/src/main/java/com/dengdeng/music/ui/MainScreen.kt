@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
@@ -77,36 +78,125 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
     }
 }
 
-/** 歌曲列表 */
+/** 歌曲列表：顶部统计 + 全部播放按钮 + 卡片化列表 */
 @Composable
 private fun SongList(viewModel: MusicViewModel, modifier: Modifier = Modifier) {
+    val songs = viewModel.songs
+    val totalDuration = songs.sumOf { it.durationMs }
+    val totalMinutes = totalDuration / 60_000
+
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 4.dp)
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentPadding = PaddingValues(top = 0.dp, bottom = 16.dp)
     ) {
-        itemsIndexed(viewModel.songs) { index, song ->
+        // 顶部统计卡片
+        item {
+            LibraryHeader(
+                songCount = songs.size,
+                totalMinutes = totalMinutes,
+                onPlayAll = { viewModel.playSong(0) },
+                onShuffleAll = { viewModel.shufflePlay() }
+            )
+        }
+
+        // 歌曲列表
+        itemsIndexed(songs) { index, song ->
             SongRow(
                 song = song,
+                index = index,
                 isCurrent = index == viewModel.currentIndex,
                 isPlaying = viewModel.isPlaying && index == viewModel.currentIndex,
                 onClick = { viewModel.playSong(index) }
             )
-            // 分割线（最后一行不画）
-            if (index < viewModel.songs.lastIndex) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(start = 76.dp),
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
-                )
-            }
         }
     }
 }
 
-/** 单行歌曲 */
+/** 曲库顶部：标题 + 统计 + 全部播放/随机播放按钮 */
+@Composable
+private fun LibraryHeader(
+    songCount: Int,
+    totalMinutes: Long,
+    onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 20.dp)
+    ) {
+        Text(
+            text = "曲库",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "$songCount 首歌曲 · 共 ${formatTotalMinutes(totalMinutes)}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // 两个大按钮并排
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 全部播放
+            Button(
+                onClick = onPlayAll,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("全部播放")
+            }
+            // 随机播放
+            OutlinedButton(
+                onClick = onShuffleAll,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Shuffle,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("随机播放")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+        )
+    }
+}
+
+/** 把总分钟数格式化为 "X 小时 Y 分钟" */
+private fun formatTotalMinutes(minutes: Long): String {
+    val hours = minutes / 60
+    val mins = minutes % 60
+    return when {
+        hours > 0 -> "${hours}小时${mins}分钟"
+        else -> "${mins}分钟"
+    }
+}
+
+/** 单行歌曲卡片：封面 + 歌名艺术家 + 时长 + 当前播放左侧高亮条 */
 @Composable
 private fun SongRow(
     song: Song,
+    index: Int,
     isCurrent: Boolean,
     isPlaying: Boolean,
     onClick: () -> Unit
@@ -115,10 +205,51 @@ private fun SongRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 封面图（圆角）
+        // 当前播放左侧高亮条（4dp 宽的竖条）
+        if (isCurrent) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(56.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+        } else {
+            Spacer(Modifier.width(4.dp))
+        }
+
+        Spacer(Modifier.width(12.dp))
+
+        // 序号或当前播放图标
+        Box(
+            modifier = Modifier.width(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isCurrent && isPlaying) {
+                EqualizerIcon(tint = MaterialTheme.colorScheme.primary)
+            } else if (isCurrent) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            } else {
+                Text(
+                    text = "${index + 1}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+
+        Spacer(Modifier.width(8.dp))
+
+        // 封面图（卡片化：圆角+微阴影）
         Box {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
@@ -131,7 +262,6 @@ private fun SongRow(
                     .size(48.dp)
                     .clip(RoundedCornerShape(10.dp))
             )
-            // 当前播放时盖一层淡色指示
             if (isCurrent) {
                 Box(
                     modifier = Modifier
@@ -150,9 +280,11 @@ private fun SongRow(
                 text = song.title,
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                fontWeight = if (isCurrent) androidx.compose.ui.text.font.FontWeight.Medium else androidx.compose.ui.text.font.FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            Spacer(Modifier.height(2.dp))
             Text(
                 text = song.artist,
                 style = MaterialTheme.typography.bodySmall,
@@ -166,23 +298,10 @@ private fun SongRow(
         Text(
             text = formatDuration(song.durationMs),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
 
-        // 播放状态指示（带脉冲动画的均衡器图标）
-        if (isCurrent) {
-            Spacer(Modifier.width(8.dp))
-            if (isPlaying) {
-                EqualizerIcon(tint = MaterialTheme.colorScheme.primary)
-            } else {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
+        Spacer(Modifier.width(4.dp))
     }
 }
 
