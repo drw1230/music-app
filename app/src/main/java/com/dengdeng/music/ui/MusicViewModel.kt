@@ -10,7 +10,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import com.dengdeng.music.data.MusicRepository
+import com.dengdeng.music.data.Playlist
 import com.dengdeng.music.data.Song
+import com.dengdeng.music.data.UserLibraryStore
 import com.dengdeng.music.player.PlaybackService
 import com.dengdeng.music.player.PlayerControllerProvider
 import com.google.common.util.concurrent.MoreExecutors
@@ -32,6 +34,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 扫描到的歌曲列表 */
     var songs by mutableStateOf<List<Song>>(emptyList())
+
+    /** 搜索关键词（空表示不搜索） */
+    var searchQuery by mutableStateOf("")
+
+    /** 搜索结果（按关键词过滤后的歌曲） */
+    val filteredSongs: List<Song>
+        get() {
+            val q = searchQuery.trim()
+            if (q.isEmpty()) return songs
+            val lower = q.lowercase()
+            return songs.filter {
+                it.title.lowercase().contains(lower) ||
+                it.artist.lowercase().contains(lower) ||
+                it.album.lowercase().contains(lower)
+            }
+        }
 
     /** 是否正在扫描 */
     var isLoading by mutableStateOf(false)
@@ -69,6 +87,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
             controller?.addListener(playerListener)
         }, MoreExecutors.directExecutor())
+
+        // 加载收藏和歌单
+        loadFavorites()
+        loadPlaylists()
     }
 
     /** 监听播放器状态变化，同步到 UI */
@@ -151,6 +173,112 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         /** 自定义循环模式：乱序（Media3 没有 REPEAT_MODE_SHUFFLE，用一个非常量值表示） */
         const val REPEAT_MODE_SHUFFLE = 99
+    }
+
+    // ==================== 收藏 ====================
+
+    /** 收藏的歌曲 ID 集合 */
+    var favoriteIds by mutableStateOf<Set<Long>>(emptySet())
+        private set
+
+    /** 收藏的歌曲列表（按原顺序过滤） */
+    val favoriteSongs: List<Song>
+        get() = songs.filter { it.id in favoriteIds }
+
+    /** 加载收藏（init 或扫描后调用） */
+    fun loadFavorites() {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            UserLibraryStore.favoriteIdsFlow(context).collect { ids ->
+                favoriteIds = ids
+            }
+        }
+    }
+
+    /** 切换收藏状态 */
+    fun toggleFavorite(songId: Long) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val nowFav = UserLibraryStore.toggleFavorite(context, songId)
+            favoriteIds = if (nowFav) favoriteIds + songId else favoriteIds - songId
+        }
+    }
+
+    /** 某首歌是否已收藏 */
+    fun isFavorite(songId: Long): Boolean = songId in favoriteIds
+
+    // ==================== 歌单 ====================
+
+    /** 歌单列表 */
+    var playlists by mutableStateOf<List<Playlist>>(emptyList())
+        private set
+
+    /** 加载歌单 */
+    fun loadPlaylists() {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            UserLibraryStore.playlistsFlow(context).collect { lists ->
+                playlists = lists
+            }
+        }
+    }
+
+    /** 新建歌单 */
+    fun createPlaylist(name: String) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            UserLibraryStore.createPlaylist(context, name)
+        }
+    }
+
+    /** 删除歌单 */
+    fun deletePlaylist(playlistId: Long) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            UserLibraryStore.deletePlaylist(context, playlistId)
+        }
+    }
+
+    /** 往歌单添加歌曲 */
+    fun addSongToPlaylist(playlistId: Long, songId: Long) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            UserLibraryStore.addSongToPlaylist(context, playlistId, songId)
+        }
+    }
+
+    /** 从歌单移除歌曲 */
+    fun removeSongFromPlaylist(playlistId: Long, songId: Long) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            UserLibraryStore.removeSongFromPlaylist(context, playlistId, songId)
+        }
+    }
+
+    /** 获取歌单的歌曲列表 */
+    fun songsOfPlaylist(playlistId: Long): List<Song> {
+        val p = playlists.firstOrNull { it.id == playlistId } ?: return emptyList()
+        return songs.filter { it.id in p.songIds }
+    }
+
+    /** 根据 ID 集合播放歌单 */
+    fun playSongs(songs: List<Song>, startIndex: Int = 0) {
+        if (songs.isEmpty()) return
+        val ctrl = controller ?: return
+        val songInfos = songs.map { song ->
+            PlaybackService.SongInfo(
+                title = song.title,
+                artist = song.artist,
+                album = song.album,
+                uri = song.uri.toString(),
+                albumArtUri = song.albumArtUri?.toString(),
+                durationMs = song.durationMs
+            )
+        }
+        val items = PlaybackService.buildMediaItems(songInfos)
+        ctrl.setMediaItems(items, startIndex, 0L)
+        ctrl.prepare()
+        ctrl.play()
     }
 
     /** 扫描本地音乐 */

@@ -13,9 +13,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -30,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,16 +48,23 @@ import androidx.activity.compose.BackHandler
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
+import com.dengdeng.music.data.Playlist
 import com.dengdeng.music.data.Song
 
 /**
- * 主界面 —— 顶部操作栏 + 歌曲列表 + 底部迷你播放条
+ * 主界面 —— Tab 切换（全部/收藏/歌单）+ 歌曲列表 + 底部迷你播放条
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
     // 是否显示全屏播放页
     var showPlayer by remember { mutableStateOf(false) }
+    // 当前 Tab：0=全部 1=收藏 2=歌单
+    var selectedTab by remember { mutableStateOf(0) }
+    // 正在查看的歌单（null 表示歌单列表页）
+    var viewingPlaylist by remember { mutableStateOf<Playlist?>(null) }
+    // 待添加到歌单的歌曲 ID（非 null 时显示选择弹窗）
+    var songForPlaylist by remember { mutableStateOf<Long?>(null) }
 
     if (showPlayer) {
         // 播放页打开时，安卓返回键先关闭播放页回到曲库（再按返回键才退出 App）
@@ -58,7 +76,7 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("我的音乐") },
+                title = { Text("DDmusic") },
                 actions = {
                     IconButton(onClick = { viewModel.scanMusic() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "重新扫描")
@@ -76,25 +94,165 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
             !hasPermission -> PermissionHint(Modifier.padding(padding))
             viewModel.isLoading -> LoadingView(Modifier.padding(padding))
             viewModel.songs.isEmpty() -> EmptyView(Modifier.padding(padding))
-            else -> SongList(viewModel, Modifier.padding(padding))
+            else -> {
+                // Tab 栏 + 内容
+                Column(Modifier.padding(padding)) {
+                    // 歌单详情页显示返回 + 歌单名；否则显示 Tab
+                    if (selectedTab == 2 && viewingPlaylist != null) {
+                        PlaylistDetailHeader(
+                            playlist = viewingPlaylist!!,
+                            songCount = viewModel.songsOfPlaylist(viewingPlaylist!!.id).size,
+                            onBack = { viewingPlaylist = null },
+                            onDelete = {
+                                viewModel.deletePlaylist(viewingPlaylist!!.id)
+                                viewingPlaylist = null
+                            }
+                        )
+                    } else {
+                        LibraryTabs(
+                            selected = selectedTab,
+                            onSelect = { selectedTab = it }
+                        )
+                    }
+
+                    when (selectedTab) {
+                        1 -> FavoriteList(
+                            viewModel = viewModel,
+                            onAddToPlaylist = { songForPlaylist = it }
+                        )
+                        2 -> if (viewingPlaylist != null) {
+                            PlaylistDetail(
+                                viewModel = viewModel,
+                                playlist = viewingPlaylist!!,
+                                onAddToPlaylist = { songForPlaylist = it }
+                            )
+                        } else {
+                            PlaylistList(
+                                viewModel = viewModel,
+                                onOpen = { viewingPlaylist = it }
+                            )
+                        }
+                        else -> SongList(
+                            viewModel = viewModel,
+                            onAddToPlaylist = { songForPlaylist = it }
+                        )
+                    }
+                }
+
+                // 添加到歌单弹窗
+                songForPlaylist?.let { songId ->
+                    AddToPlaylistSheet(
+                        viewModel = viewModel,
+                        songId = songId,
+                        onDismiss = { songForPlaylist = null }
+                    )
+                }
+            }
         }
     }
 }
 
-/** 歌曲列表：顶部统计 + 全部播放按钮 + 卡片化列表 */
+/** 曲库 Tab 栏 */
 @Composable
-private fun SongList(viewModel: MusicViewModel, modifier: Modifier = Modifier) {
-    val songs = viewModel.songs
+private fun LibraryTabs(selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        listOf("全部", "收藏", "歌单").forEachIndexed { index, label ->
+            val isSelected = selected == index
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.clickable { onSelect(index) }
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+/** 歌单详情顶部：返回 + 名称 + 删除 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaylistDetailHeader(
+    playlist: Playlist,
+    songCount: Int,
+    onBack: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = playlist.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "$songCount 首歌曲",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        IconButton(onClick = onDelete) {
+            Icon(
+                Icons.Default.Delete,
+                contentDescription = "删除歌单",
+                tint = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+/** 全部歌曲列表（带搜索框） */
+@Composable
+private fun SongList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> Unit) {
+    val songs = viewModel.filteredSongs
     val totalDuration = songs.sumOf { it.durationMs }
     val totalMinutes = totalDuration / 60_000
 
+    // 搜索框状态
+    var query by remember { mutableStateOf("") }
+    // 同步到 ViewModel（用于播放时保持过滤）
+    androidx.compose.runtime.SideEffect { viewModel.searchQuery = query }
+
     LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(top = 0.dp, bottom = 16.dp)
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 16.dp)
     ) {
-        // 顶部统计卡片
+        item {
+            // 搜索框
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索歌曲、艺术家、专辑") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                singleLine = true,
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+        }
         item {
             LibraryHeader(
                 songCount = songs.size,
@@ -103,21 +261,356 @@ private fun SongList(viewModel: MusicViewModel, modifier: Modifier = Modifier) {
                 onShuffleAll = { viewModel.shufflePlay() }
             )
         }
-
-        // 歌曲列表
+        if (songs.isEmpty() && query.isNotBlank()) {
+            // 搜索无结果
+            item {
+                Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        "没有找到「${query.trim()}」相关歌曲",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
         itemsIndexed(songs) { index, song ->
             SongRow(
                 song = song,
                 index = index,
                 isCurrent = index == viewModel.currentIndex,
                 isPlaying = viewModel.isPlaying && index == viewModel.currentIndex,
-                onClick = { viewModel.playSong(index) }
+                isFavorite = viewModel.isFavorite(song.id),
+                onClick = { viewModel.playSong(index) },
+                onAddToPlaylist = { onAddToPlaylist(song.id) }
             )
         }
     }
 }
 
-/** 曲库顶部：标题 + 统计 + 全部播放/随机播放按钮 */
+/** 收藏歌曲列表 */
+@Composable
+private fun FavoriteList(viewModel: MusicViewModel, onAddToPlaylist: (Long) -> Unit) {
+    val favorites = viewModel.favoriteSongs
+    if (favorites.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.FavoriteBorder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "还没有收藏歌曲",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "播放页点 ♡ 收藏喜欢的歌",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
+        }
+        return
+    }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Favorite,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "我的收藏（${favorites.size}）",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        itemsIndexed(favorites) { index, song ->
+            SongRow(
+                song = song,
+                index = index,
+                isCurrent = song.id == viewModel.currentSong()?.id,
+                isPlaying = viewModel.isPlaying && song.id == viewModel.currentSong()?.id,
+                isFavorite = true,
+                onClick = { viewModel.playSongs(favorites, index) },
+                onAddToPlaylist = { onAddToPlaylist(song.id) }
+            )
+        }
+    }
+}
+
+/** 歌单列表页 */
+@Composable
+private fun PlaylistList(
+    viewModel: MusicViewModel,
+    onOpen: (Playlist) -> Unit
+) {
+    val playlists = viewModel.playlists
+    var showCreateDialog by remember { mutableStateOf(false) }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "我的歌单（${playlists.size}）",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                // 新建歌单按钮
+                Button(
+                    onClick = { showCreateDialog = true },
+                    shape = RoundedCornerShape(20.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("新建歌单", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+
+        if (playlists.isEmpty()) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.LibraryMusic,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "还没有歌单",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "点击右上角新建",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+        }
+
+        itemsIndexed(playlists) { index, playlist ->
+            val songsInPlaylist = viewModel.songsOfPlaylist(playlist.id)
+            // 歌单卡片
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 5.dp)
+                    .clickable { onOpen(playlist) }
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 歌单封面（第一首歌的封面或图标）
+                    val coverSong = songsInPlaylist.firstOrNull()
+                    if (coverSong != null) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(coverSong.albumArtUri ?: coverSong.uri)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Album,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = playlist.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${songsInPlaylist.size} 首歌曲",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
+    // 新建歌单对话框
+    if (showCreateDialog) {
+        CreatePlaylistDialog(
+            onDismiss = { showCreateDialog = false },
+            onCreate = { name ->
+                viewModel.createPlaylist(name)
+                showCreateDialog = false
+            }
+        )
+    }
+}
+
+/** 歌单详情页 */
+@Composable
+private fun PlaylistDetail(
+    viewModel: MusicViewModel,
+    playlist: Playlist,
+    onAddToPlaylist: (Long) -> Unit
+) {
+    val songs = viewModel.songsOfPlaylist(playlist.id)
+    if (songs.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                "歌单是空的，去全部歌曲里点 + 添加",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
+
+    LazyColumn(Modifier.fillMaxSize()) {
+        itemsIndexed(songs) { index, song ->
+            SongRow(
+                song = song,
+                index = index,
+                isCurrent = song.id == viewModel.currentSong()?.id,
+                isPlaying = viewModel.isPlaying && song.id == viewModel.currentSong()?.id,
+                isFavorite = viewModel.isFavorite(song.id),
+                onClick = { viewModel.playSongs(songs, index) },
+                onAddToPlaylist = { onAddToPlaylist(song.id) }
+            )
+        }
+    }
+}
+
+/** 新建歌单对话框 */
+@Composable
+private fun CreatePlaylistDialog(
+    onDismiss: () -> Unit,
+    onCreate: (String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建歌单") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                placeholder = { Text("歌单名称") },
+                singleLine = true
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (name.isNotBlank()) onCreate(name.trim()) },
+                enabled = name.isNotBlank()
+            ) { Text("创建") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 添加到歌单的底部弹窗（由 MainScreen 的状态控制显示） */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddToPlaylistSheet(
+    viewModel: MusicViewModel,
+    songId: Long,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            Text(
+                "添加到歌单",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+            if (viewModel.playlists.isEmpty()) {
+                Text(
+                    "还没有歌单，去歌单 Tab 新建一个吧",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+            } else {
+                viewModel.playlists.forEach { playlist ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.addSongToPlaylist(playlist.id, songId)
+                                onDismiss()
+                            }
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.PlaylistAdd,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            playlist.name,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 曲库头部统计 */
 @Composable
 private fun LibraryHeader(
     songCount: Int,
@@ -128,13 +621,13 @@ private fun LibraryHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 20.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Text(
             text = "曲库",
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            fontWeight = FontWeight.Bold
         )
         Spacer(Modifier.height(4.dp))
         Text(
@@ -143,49 +636,32 @@ private fun LibraryHeader(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(16.dp))
-
-        // 两个大按钮并排
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // 全部播放
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
                 onClick = onPlayAll,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp)
-                )
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("全部播放")
             }
-            // 随机播放
             OutlinedButton(
                 onClick = onShuffleAll,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Shuffle,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp)
-                )
+                Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("随机播放")
             }
         }
-
         Spacer(Modifier.height(16.dp))
-        HorizontalDivider(
-            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
-        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
     }
 }
 
-/** 把总分钟数格式化为 "X 小时 Y 分钟" */
+/** 总分钟数格式化 */
 private fun formatTotalMinutes(minutes: Long): String {
     val hours = minutes / 60
     val mins = minutes % 60
@@ -195,14 +671,16 @@ private fun formatTotalMinutes(minutes: Long): String {
     }
 }
 
-/** 单行歌曲卡片：封面 + 歌名艺术家 + 时长 + 当前播放左侧高亮条 */
+/** 单行歌曲 */
 @Composable
 private fun SongRow(
     song: Song,
     index: Int,
     isCurrent: Boolean,
     isPlaying: Boolean,
-    onClick: () -> Unit
+    isFavorite: Boolean,
+    onClick: () -> Unit,
+    onAddToPlaylist: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -211,7 +689,7 @@ private fun SongRow(
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 当前播放左侧高亮条（4dp 宽的竖条）
+        // 当前播放左侧高亮条
         if (isCurrent) {
             Box(
                 modifier = Modifier
@@ -235,7 +713,7 @@ private fun SongRow(
                 EqualizerIcon(tint = MaterialTheme.colorScheme.primary)
             } else if (isCurrent) {
                 Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    Icons.Default.PlayArrow,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
@@ -252,7 +730,7 @@ private fun SongRow(
 
         Spacer(Modifier.width(8.dp))
 
-        // 封面图（卡片化：圆角+微阴影）
+        // 封面
         Box {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
@@ -277,13 +755,13 @@ private fun SongRow(
 
         Spacer(Modifier.width(12.dp))
 
-        // 歌名和艺术家
+        // 歌名 + 艺术家
         Column(Modifier.weight(1f)) {
             Text(
                 text = song.title,
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                fontWeight = if (isCurrent) androidx.compose.ui.text.font.FontWeight.Medium else androidx.compose.ui.text.font.FontWeight.Normal,
+                fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -297,6 +775,17 @@ private fun SongRow(
             )
         }
 
+        // 收藏标记（小爱心）
+        if (isFavorite) {
+            Icon(
+                Icons.Default.Favorite,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+
         // 时长
         Text(
             text = formatDuration(song.durationMs),
@@ -308,9 +797,9 @@ private fun SongRow(
     }
 }
 
-/** 播放中的动态均衡器图标（四根跳动柱） */
+/** 播放中的动态均衡器图标 */
 @Composable
-private fun EqualizerIcon(tint: androidx.compose.ui.graphics.Color) {
+private fun EqualizerIcon(tint: Color) {
     val transition = rememberInfiniteTransition(label = "eq")
     val heights = listOf(0.5f, 1f, 0.7f, 0.85f)
     val delays = listOf(0, 120, 240, 360)
@@ -328,7 +817,7 @@ private fun EqualizerIcon(tint: androidx.compose.ui.graphics.Color) {
                     animation = tween(
                         durationMillis = 300,
                         delayMillis = delays[i],
-                        easing = androidx.compose.animation.core.FastOutSlowInEasing
+                        easing = FastOutSlowInEasing
                     ),
                     repeatMode = RepeatMode.Reverse
                 ),
@@ -345,15 +834,18 @@ private fun EqualizerIcon(tint: androidx.compose.ui.graphics.Color) {
     }
 }
 
-/** 底部迷你播放条：小封面 + 歌名 + 控制按钮 + 顶部进度线 */
+/** 底部迷你播放条：小封面 + 歌名 + 控制按钮 + 可拖动进度条 */
 @Composable
 private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
     val song = viewModel.currentSong() ?: return
 
-    // 播放进度（百分比）
     val progress = if (viewModel.durationMs > 0) {
         (viewModel.currentPositionMs.toFloat() / viewModel.durationMs).coerceIn(0f, 1f)
     } else 0f
+
+    // 拖动中的进度（null 表示未拖动）
+    var dragProgress by remember { mutableStateOf<Float?>(null) }
+    val displayProgress = dragProgress ?: progress
 
     Surface(
         tonalElevation = 3.dp,
@@ -363,22 +855,32 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
             .clickable(onClick = onClick)
     ) {
         Column {
-            // 顶部进度线
-            LinearProgressIndicator(
-                progress = { progress },
+            // 可拖动的进度条（点击/拖动 seek）
+            Slider(
+                value = displayProgress,
+                onValueChange = { dragProgress = it },
+                onValueChangeFinished = {
+                    dragProgress?.let {
+                        viewModel.seekTo((it * viewModel.durationMs).toLong())
+                    }
+                    dragProgress = null
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(2.dp),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    .height(28.dp)
+                    .padding(horizontal = 8.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = MaterialTheme.colorScheme.primary,
+                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                    inactiveTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                )
             )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 小封面（圆角）
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(song.albumArtUri ?: song.uri)
@@ -393,7 +895,6 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
 
                 Spacer(Modifier.width(12.dp))
 
-                // 歌名 + 艺术家
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = song.title,
@@ -410,10 +911,9 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                     )
                 }
 
-                // 控制按钮（原生图标）
                 IconButton(onClick = { viewModel.previous() }) {
                     Icon(
-                        imageVector = Icons.Default.SkipPrevious,
+                        Icons.Default.SkipPrevious,
                         contentDescription = "上一首",
                         modifier = Modifier.size(22.dp)
                     )
@@ -427,7 +927,7 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                 }
                 IconButton(onClick = { viewModel.next() }) {
                     Icon(
-                        imageVector = Icons.Default.SkipNext,
+                        Icons.Default.SkipNext,
                         contentDescription = "下一首",
                         modifier = Modifier.size(22.dp)
                     )

@@ -76,7 +76,8 @@ fun PlayerScreen(
     }
 
     var showQueue by remember { mutableStateOf(false) }
-    var isFavorite by remember(song.id) { mutableStateOf(false) }
+    // 收藏状态从 ViewModel 读取（持久化），切歌时刷新
+    val isFavorite = viewModel.isFavorite(song.id)
 
     val albumArt = song.albumArtUri ?: song.uri
 
@@ -258,7 +259,7 @@ fun PlayerScreen(
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                IconButton(onClick = { isFavorite = !isFavorite }) {
+                IconButton(onClick = { viewModel.toggleFavorite(song.id) }) {
                     Icon(
                         imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = if (isFavorite) "取消收藏" else "收藏",

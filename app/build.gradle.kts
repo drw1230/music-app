@@ -61,6 +61,9 @@ dependencies {
     // Coil 图片加载（显示专辑封面）
     implementation("io.coil-kt:coil-compose:2.7.0")
 
+    // DataStore 轻量持久化（收藏、歌单）
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+
     // 生命周期
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
