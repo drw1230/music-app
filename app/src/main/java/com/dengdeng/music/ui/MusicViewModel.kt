@@ -15,6 +15,9 @@ import com.dengdeng.music.player.PlaybackService
 import com.dengdeng.music.player.PlayerControllerProvider
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -39,6 +42,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 是否正在播放 */
     var isPlaying by mutableStateOf(false)
 
+    /** 当前播放进度（毫秒） */
+    var currentPositionMs by mutableStateOf(0L)
+
+    /** 当前歌曲总时长（毫秒） */
+    var durationMs by mutableStateOf(0L)
+
+    /** 循环模式：0=顺序 1=单曲 2=全部 */
+    var repeatMode by mutableStateOf(Player.REPEAT_MODE_OFF)
+
+    /** 进度轮询协程 */
+    private var positionJob: Job? = null
+
     /** MediaController（异步连接，可能为 null） */
     private var controller: MediaController? = null
 
@@ -60,11 +75,55 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             this@MusicViewModel.isPlaying = isPlaying
+            updatePositionPolling()
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             currentIndex = controller?.currentMediaItemIndex ?: -1
+            syncDuration()
         }
+
+        override fun onRepeatModeChanged(repeatMode: Int) {
+            this@MusicViewModel.repeatMode = repeatMode
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            syncDuration()
+        }
+    }
+
+    /** 从控制器同步总时长 */
+    private fun syncDuration() {
+        durationMs = controller?.duration ?: 0L
+    }
+
+    /** 根据播放状态启停进度轮询（每 500ms 刷新一次） */
+    private fun updatePositionPolling() {
+        if (isPlaying) {
+            if (positionJob == null) {
+                positionJob = viewModelScope.launch {
+                    while (isActive) {
+                        currentPositionMs = controller?.currentPosition ?: 0L
+                        delay(500)
+                    }
+                }
+            }
+        } else {
+            positionJob?.cancel()
+            positionJob = null
+        }
+    }
+
+    /** 切换循环模式：顺序 → 单曲 → 全部 → 顺序 */
+    fun cycleRepeatMode() {
+        val ctrl = controller ?: return
+        val next = when (ctrl.repeatMode) {
+            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ONE
+            Player.REPEAT_MODE_ONE -> Player.REPEAT_MODE_ALL
+            else -> Player.REPEAT_MODE_OFF
+        }
+        ctrl.repeatMode = next
+        repeatMode = next
     }
 
     /** 扫描本地音乐 */
@@ -132,5 +191,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun currentSong(): Song? {
         val idx = currentIndex
         return songs.getOrNull(idx)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        positionJob?.cancel()
+        positionJob = null
+        controller?.release()
+        controller = null
     }
 }

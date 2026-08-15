@@ -11,6 +11,10 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,6 +33,14 @@ import com.dengdeng.music.data.Song
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
+    // 是否显示全屏播放页
+    var showPlayer by remember { mutableStateOf(false) }
+
+    if (showPlayer) {
+        PlayerScreen(viewModel = viewModel, onClose = { showPlayer = false })
+        return
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -42,7 +54,7 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
         },
         bottomBar = {
             if (viewModel.currentSong() != null) {
-                MiniPlayerBar(viewModel)
+                MiniPlayerBar(viewModel, onClick = { showPlayer = true })
             }
         }
     ) { padding ->
@@ -140,11 +152,14 @@ private fun SongRow(
 
 /** 底部迷你播放条 */
 @Composable
-private fun MiniPlayerBar(viewModel: MusicViewModel) {
+private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
     val song = viewModel.currentSong() ?: return
     Surface(
         tonalElevation = 3.dp,
-        color = MaterialTheme.colorScheme.surfaceContainer
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier
