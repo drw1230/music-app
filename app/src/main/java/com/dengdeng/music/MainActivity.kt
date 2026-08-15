@@ -2,6 +2,7 @@ package com.dengdeng.music
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -36,6 +37,24 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { /* 拒绝则通知栏控制不可见，但不阻塞主流程 */ }
 
+    /** 删除本地音频文件（Android 11+ 系统弹确认框，用户确认后删除） */
+    private val deleteSongsLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        // 用户确认删除后，重新扫描曲库
+        if (result.resultCode == RESULT_OK) {
+            viewModel.scanMusic()
+        }
+    }
+
+    /** 发起删除请求：传入要删除的音频 Uri 列表 */
+    fun requestDeleteSongs(uris: List<Uri>) {
+        val pendingIntent = android.provider.MediaStore.createDeleteRequest(contentResolver, uris)
+        deleteSongsLauncher.launch(
+            androidx.activity.result.IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkAndRequestPermission()
@@ -43,7 +62,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             MusicAppTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    MainScreen(viewModel = viewModel, hasPermission = hasPermission)
+                    MainScreen(
+                        viewModel = viewModel,
+                        hasPermission = hasPermission,
+                        onDeleteSongs = { requestDeleteSongs(it) }
+                    )
                 }
             }
         }

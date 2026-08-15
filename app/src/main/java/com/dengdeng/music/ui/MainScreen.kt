@@ -19,13 +19,16 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
@@ -53,21 +56,23 @@ import com.dengdeng.music.data.Playlist
 import com.dengdeng.music.data.Song
 
 /**
- * 主界面 —— Tab 切换（全部/收藏/歌单）+ 歌曲列表 + 底部迷你播放条
+ * 主界面 —— Tab 切换（全部/喜欢/歌单）+ 歌曲列表 + 底部迷你播放条
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
+fun MainScreen(
+    viewModel: MusicViewModel,
+    hasPermission: Boolean,
+    onDeleteSongs: (List<android.net.Uri>) -> Unit
+) {
     // 是否显示全屏播放页
     var showPlayer by remember { mutableStateOf(false) }
-    // 当前 Tab：0=全部 1=收藏 2=歌单
+    // 当前 Tab：0=全部 1=喜欢 2=歌单
     var selectedTab by remember { mutableStateOf(0) }
     // 正在查看的歌单（null 表示歌单列表页）
     var viewingPlaylist by remember { mutableStateOf<Playlist?>(null) }
     // 待添加到歌单的歌曲 ID（非 null 时显示选择弹窗）
     var songForPlaylist by remember { mutableStateOf<Long?>(null) }
-    // 长按选中的歌曲（非 null 时显示操作菜单）
-    var songMenu by remember { mutableStateOf<Song?>(null) }
 
     if (showPlayer) {
         // 播放页打开时，安卓返回键先关闭播放页回到曲库（再按返回键才退出 App）
@@ -122,14 +127,14 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
                         1 -> FavoriteList(
                             viewModel = viewModel,
                             onAddToPlaylist = { songForPlaylist = it },
-                            onSongLongPress = { songMenu = it }
+                            onDeleteSongs = onDeleteSongs
                         )
                         2 -> if (viewingPlaylist != null) {
                             PlaylistDetail(
                                 viewModel = viewModel,
                                 playlist = viewingPlaylist!!,
                                 onAddToPlaylist = { songForPlaylist = it },
-                                onSongLongPress = { songMenu = it }
+                                onDeleteSongs = onDeleteSongs
                             )
                         } else {
                             PlaylistList(
@@ -140,7 +145,7 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
                         else -> SongList(
                             viewModel = viewModel,
                             onAddToPlaylist = { songForPlaylist = it },
-                            onSongLongPress = { songMenu = it }
+                            onDeleteSongs = onDeleteSongs
                         )
                     }
                 }
@@ -151,19 +156,6 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
                         viewModel = viewModel,
                         songId = songId,
                         onDismiss = { songForPlaylist = null }
-                    )
-                }
-
-                // 长按歌曲操作菜单
-                songMenu?.let { song ->
-                    SongActionSheet(
-                        viewModel = viewModel,
-                        song = song,
-                        onDismiss = { songMenu = null },
-                        onAddToPlaylist = {
-                            songMenu = null
-                            songForPlaylist = song.id
-                        }
                     )
                 }
             }
@@ -247,7 +239,7 @@ private fun PlaylistDetailHeader(
 private fun SongList(
     viewModel: MusicViewModel,
     onAddToPlaylist: (Long) -> Unit,
-    onSongLongPress: (Song) -> Unit
+    onDeleteSongs: (List<android.net.Uri>) -> Unit
 ) {
     val songs = viewModel.filteredSongs
     val totalDuration = songs.sumOf { it.durationMs }
@@ -298,14 +290,15 @@ private fun SongList(
         }
         itemsIndexed(songs) { index, song ->
             SongRow(
+                viewModel = viewModel,
                 song = song,
                 index = index,
                 isCurrent = index == viewModel.currentIndex,
                 isPlaying = viewModel.isPlaying && index == viewModel.currentIndex,
                 isFavorite = viewModel.isFavorite(song.id),
                 onClick = { viewModel.playSong(index) },
-                onLongPress = { onSongLongPress(song) },
-                onAddToPlaylist = { onAddToPlaylist(song.id) }
+                onAddToPlaylist = { onAddToPlaylist(song.id) },
+                onDeleteFromDisk = { onDeleteSongs(listOf(song.uri)) }
             )
         }
     }
@@ -316,7 +309,7 @@ private fun SongList(
 private fun FavoriteList(
     viewModel: MusicViewModel,
     onAddToPlaylist: (Long) -> Unit,
-    onSongLongPress: (Song) -> Unit
+    onDeleteSongs: (List<android.net.Uri>) -> Unit
 ) {
     val favorites = viewModel.favoriteSongs
     if (favorites.isEmpty()) {
@@ -367,14 +360,17 @@ private fun FavoriteList(
         }
         itemsIndexed(favorites) { index, song ->
             SongRow(
+                viewModel = viewModel,
                 song = song,
                 index = index,
                 isCurrent = song.id == viewModel.currentSong()?.id,
                 isPlaying = viewModel.isPlaying && song.id == viewModel.currentSong()?.id,
                 isFavorite = true,
                 onClick = { viewModel.playSongs(favorites, index) },
-                onLongPress = { onSongLongPress(song) },
-                onAddToPlaylist = { onAddToPlaylist(song.id) }
+                // 喜欢列表里"从列表移除" = 取消喜欢
+                onRemoveFromList = { viewModel.toggleFavorite(song.id) },
+                onAddToPlaylist = { onAddToPlaylist(song.id) },
+                onDeleteFromDisk = { onDeleteSongs(listOf(song.uri)) }
             )
         }
     }
@@ -529,7 +525,7 @@ private fun PlaylistDetail(
     viewModel: MusicViewModel,
     playlist: Playlist,
     onAddToPlaylist: (Long) -> Unit,
-    onSongLongPress: (Song) -> Unit
+    onDeleteSongs: (List<android.net.Uri>) -> Unit
 ) {
     val songs = viewModel.songsOfPlaylist(playlist.id)
     if (songs.isEmpty()) {
@@ -546,14 +542,17 @@ private fun PlaylistDetail(
     LazyColumn(Modifier.fillMaxSize()) {
         itemsIndexed(songs) { index, song ->
             SongRow(
+                viewModel = viewModel,
                 song = song,
                 index = index,
                 isCurrent = song.id == viewModel.currentSong()?.id,
                 isPlaying = viewModel.isPlaying && song.id == viewModel.currentSong()?.id,
                 isFavorite = viewModel.isFavorite(song.id),
                 onClick = { viewModel.playSongs(songs, index) },
-                onLongPress = { onSongLongPress(song) },
-                onAddToPlaylist = { onAddToPlaylist(song.id) }
+                // 歌单里"从列表移除" = 从歌单移除
+                onRemoveFromList = { viewModel.removeSongFromPlaylist(playlist.id, song.id) },
+                onAddToPlaylist = { onAddToPlaylist(song.id) },
+                onDeleteFromDisk = { onDeleteSongs(listOf(song.uri)) }
             )
         }
     }
@@ -641,126 +640,6 @@ private fun AddToPlaylistSheet(
     }
 }
 
-/** 长按歌曲弹出的操作菜单（参考主流音乐 App） */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SongActionSheet(
-    viewModel: MusicViewModel,
-    song: Song,
-    onDismiss: () -> Unit,
-    onAddToPlaylist: () -> Unit
-) {
-    val isLiked = viewModel.isFavorite(song.id)
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 24.dp)) {
-            // 歌曲信息头
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(song.albumArtUri ?: song.uri)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                )
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = song.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = song.artist,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-
-            // 菜单项：播放
-            SongActionItem(
-                icon = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                label = "播放",
-                onClick = {
-                    val idx = viewModel.songs.indexOfFirst { it.id == song.id }
-                    if (idx >= 0) viewModel.playSong(idx)
-                    onDismiss()
-                }
-            )
-            // 菜单项：下一首播放
-            SongActionItem(
-                icon = { Icon(Icons.Default.SkipNext, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                label = "下一首播放",
-                onClick = {
-                    viewModel.playNext(song.id)
-                    onDismiss()
-                }
-            )
-            // 菜单项：喜欢 / 取消喜欢
-            SongActionItem(
-                icon = {
-                    Icon(
-                        if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = null,
-                        tint = if (isLiked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                    )
-                },
-                label = if (isLiked) "取消喜欢" else "喜欢",
-                onClick = {
-                    viewModel.toggleFavorite(song.id)
-                    onDismiss()
-                }
-            )
-            // 菜单项：添加到歌单
-            SongActionItem(
-                icon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                label = "添加到歌单",
-                onClick = onAddToPlaylist
-            )
-        }
-    }
-}
-
-/** 操作菜单单项：图标 + 文字，整行可点 */
-@Composable
-private fun SongActionItem(
-    icon: @Composable () -> Unit,
-    label: String,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        icon()
-        Spacer(Modifier.width(16.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge
-        )
-    }
-}
-
 /** 曲库头部统计 */
 @Composable
 private fun LibraryHeader(
@@ -822,25 +701,30 @@ private fun formatTotalMinutes(minutes: Long): String {
     }
 }
 
-/** 单行歌曲（支持点击播放 + 长按弹出操作菜单） */
+/** 单行歌曲（点击播放 + 长按/⋮ 弹出右侧小菜单） */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SongRow(
+    viewModel: MusicViewModel,
     song: Song,
     index: Int,
     isCurrent: Boolean,
     isPlaying: Boolean,
     isFavorite: Boolean,
     onClick: () -> Unit,
-    onLongPress: () -> Unit,
-    onAddToPlaylist: () -> Unit
+    onRemoveFromList: (() -> Unit)? = null,
+    onAddToPlaylist: () -> Unit,
+    onDeleteFromDisk: () -> Unit
 ) {
+    // 菜单展开状态
+    var menuExpanded by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = onLongPress
+                onLongClick = { menuExpanded = true }
             )
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -949,7 +833,87 @@ private fun SongRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
 
-        Spacer(Modifier.width(4.dp))
+        // ⋮ 更多按钮 + 右侧下拉菜单
+        Box {
+            IconButton(onClick = { menuExpanded = true }) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "更多操作",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+            ) {
+                // 播放
+                DropdownMenuItem(
+                    text = { Text("播放") },
+                    leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                    onClick = { menuExpanded = false; onClick() }
+                )
+                // 下一首播放
+                DropdownMenuItem(
+                    text = { Text("下一首播放") },
+                    leadingIcon = { Icon(Icons.Default.SkipNext, contentDescription = null) },
+                    onClick = {
+                        menuExpanded = false
+                        viewModel.playNext(song.id)
+                    }
+                )
+                // 喜欢 / 取消喜欢
+                DropdownMenuItem(
+                    text = { Text(if (isFavorite) "取消喜欢" else "喜欢") },
+                    leadingIcon = {
+                        Icon(
+                            if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = null,
+                            tint = if (isFavorite) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        viewModel.toggleFavorite(song.id)
+                    }
+                )
+                // 添加到歌单
+                DropdownMenuItem(
+                    text = { Text("添加到歌单") },
+                    leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
+                    onClick = { menuExpanded = false; onAddToPlaylist() }
+                )
+                // 从列表移除（仅喜欢/歌单列表显示）
+                if (onRemoveFromList != null) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                    DropdownMenuItem(
+                        text = { Text("从列表移除", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.RemoveCircleOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        onClick = { menuExpanded = false; onRemoveFromList() }
+                    )
+                }
+                // 从本地删除
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                DropdownMenuItem(
+                    text = { Text("从本地删除", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.DeleteOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    },
+                    onClick = { menuExpanded = false; onDeleteFromDisk() }
+                )
+            }
+        }
     }
 }
 
