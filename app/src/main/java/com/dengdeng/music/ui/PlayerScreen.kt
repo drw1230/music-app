@@ -10,16 +10,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -55,6 +59,9 @@ fun PlayerScreen(
         return
     }
 
+    // 是否显示播放队列弹窗
+    var showQueue by remember { mutableStateOf(false) }
+
     // 深色背景渐变（播放页沉浸感）
     Box(
         modifier = Modifier
@@ -77,7 +84,7 @@ fun PlayerScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 顶部栏：返回按钮
+            // 顶部栏：返回按钮 + 队列入口
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -97,6 +104,13 @@ fun PlayerScreen(
                     color = Color.White.copy(alpha = 0.8f),
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(onClick = { showQueue = true }) {
+                    Icon(
+                        imageVector = Icons.Default.QueueMusic,
+                        contentDescription = "播放队列",
+                        tint = Color.White
+                    )
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -134,6 +148,133 @@ fun PlayerScreen(
             PlayerControls(viewModel)
 
             Spacer(Modifier.height(24.dp))
+        }
+
+        // 播放队列弹窗
+        if (showQueue) {
+            QueueSheet(
+                viewModel = viewModel,
+                onDismiss = { showQueue = false }
+            )
+        }
+    }
+}
+
+/** 播放队列弹窗：当前歌曲高亮，点击切歌，支持随机播放 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QueueSheet(
+    viewModel: MusicViewModel,
+    onDismiss: () -> Unit
+) {
+    val songs = viewModel.songs
+    val currentIndex = viewModel.currentIndex
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1A1A2E)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 24.dp)
+        ) {
+            // 标题栏：播放队列 + 随机播放
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "播放队列（${songs.size}）",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = {
+                    viewModel.shufflePlay()
+                    onDismiss()
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.Shuffle,
+                        contentDescription = "随机播放",
+                        tint = Color.White
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("随机播放", color = Color.White)
+                }
+            }
+
+            // 歌曲列表
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+            ) {
+                itemsIndexed(songs) { index, song ->
+                    val isCurrent = index == currentIndex
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.playFromQueue(index)
+                                onDismiss()
+                            }
+                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 序号或当前播放图标
+                        Box(modifier = Modifier.width(28.dp)) {
+                            if (isCurrent) {
+                                Icon(
+                                    imageVector = if (viewModel.isPlaying) {
+                                        Icons.Default.Equalizer
+                                    } else {
+                                        Icons.Default.PlayArrow
+                                    },
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = "${index + 1}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.4f)
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.width(8.dp))
+
+                        // 歌名 + 艺术家
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = song.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isCurrent) Color.White else Color.White.copy(alpha = 0.85f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = song.artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.5f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        // 时长
+                        Text(
+                            text = formatDuration(song.durationMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+            }
         }
     }
 }

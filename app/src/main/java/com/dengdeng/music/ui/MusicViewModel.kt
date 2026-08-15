@@ -168,6 +168,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (ctrl.isPlaying) ctrl.pause() else ctrl.play()
     }
 
+    /** 随机播放：从当前列表随机选一首开始播放 */
+    fun shufflePlay() {
+        val songList = songs
+        if (songList.isEmpty()) return
+        val randomIndex = (0 until songList.size).random()
+        playSong(randomIndex)
+    }
+
+    /** 播放队列中的指定歌曲（队列弹窗点击切歌） */
+    fun playFromQueue(index: Int) {
+        val ctrl = controller ?: return
+        if (index < 0 || index >= ctrl.mediaItemCount) return
+        ctrl.seekTo(index, 0L)
+        ctrl.play()
+        currentIndex = index
+    }
+
     fun next() {
         val ctrl = controller ?: return
         ctrl.seekToNextMediaItem()
