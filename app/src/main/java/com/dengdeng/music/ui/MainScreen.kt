@@ -33,6 +33,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.BackHandler
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
@@ -48,6 +49,8 @@ fun MainScreen(viewModel: MusicViewModel, hasPermission: Boolean) {
     var showPlayer by remember { mutableStateOf(false) }
 
     if (showPlayer) {
+        // 播放页打开时，安卓返回键先关闭播放页回到曲库（再按返回键才退出 App）
+        BackHandler { showPlayer = false }
         PlayerScreen(viewModel = viewModel, onClose = { showPlayer = false })
         return
     }
