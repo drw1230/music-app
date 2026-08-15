@@ -6,14 +6,15 @@ plugins {
 
 android {
     namespace = "com.dengdeng.music"
-    compileSdk = 36
+    // AGP 8.7.3 官方支持的最大 compileSdk 是 35（36 需 AGP 8.9+，之前用 suppress 强压会导致部分设备闪退）
+    compileSdk = 35
     // 显式指定本地已安装的 build-tools 版本，避免 AGP 联网下载默认版本
     buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "com.dengdeng.music"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
     }
