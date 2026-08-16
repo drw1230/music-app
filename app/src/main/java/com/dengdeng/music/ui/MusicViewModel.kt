@@ -68,6 +68,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         sortMode = mode
     }
 
+    /**
+     * 搜索联想：返回匹配关键词的歌曲（按歌名去重、前缀优先、短名优先）
+     * 供搜索框输入时显示智能联想建议
+     */
+    fun suggestSongs(query: String): List<Song> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return emptyList()
+        val seen = HashSet<String>()
+        return songs
+            .filter { it.title.lowercase().contains(q) }
+            .sortedWith(
+                compareBy<Song>(
+                    { !it.title.lowercase().startsWith(q) },  // 前缀匹配优先
+                    { it.title.length },                        // 短名优先
+                    { it.title.lowercase() }
+                )
+            )
+            .filter { seen.add(it.title) }  // 同歌名去重
+            .take(8)
+    }
+
     // ==================== 专辑分组 ====================
 
     /** 专辑列表（按专辑名分组，含封面/艺术家/歌曲数） */

@@ -51,6 +51,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -435,7 +439,7 @@ private fun PlaylistDetailHeader(
     }
 }
 
-/** 全部歌曲列表（带搜索框） */
+/** 全部歌曲列表（带搜索框 + 智能联想） */
 @Composable
 private fun SongList(
     viewModel: MusicViewModel,
@@ -448,6 +452,10 @@ private fun SongList(
 
     // 搜索框状态
     var query by remember { mutableStateOf("") }
+    // 联想面板开关（点击联想项后关闭，继续输入重新打开）
+    var suggestOpen by remember { mutableStateOf(true) }
+    // 联想建议（去重歌名，前缀优先）
+    val suggestions = remember(query, viewModel.songs) { viewModel.suggestSongs(query) }
     // 同步到 ViewModel（用于播放时保持过滤）
     androidx.compose.runtime.SideEffect { viewModel.searchQuery = query }
 
@@ -459,7 +467,10 @@ private fun SongList(
             // 搜索框
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = {
+                    query = it
+                    suggestOpen = true
+                },
                 placeholder = { Text("搜索歌曲、艺术家、专辑") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 singleLine = true,
@@ -468,6 +479,29 @@ private fun SongList(
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp)
             )
+        }
+        // 智能联想区：输入关键词时显示匹配的歌曲名建议
+        if (query.isNotBlank() && suggestOpen && suggestions.isNotEmpty()) {
+            item {
+                Column(Modifier.padding(bottom = 4.dp)) {
+                    Text(
+                        "搜索建议",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                    )
+                    suggestions.forEach { song ->
+                        SuggestionRow(
+                            song = song,
+                            query = query.trim(),
+                            onClick = {
+                                query = song.title
+                                suggestOpen = false
+                            }
+                        )
+                    }
+                }
+            }
         }
         item {
             LibraryHeader(
@@ -1036,6 +1070,76 @@ private fun formatTotalMinutes(minutes: Long): String {
     return when {
         hours > 0 -> "${hours}小时${mins}分钟"
         else -> "${mins}分钟"
+    }
+}
+
+/** 搜索联想行：小封面 + 高亮匹配的歌名 + 歌手 */
+@Composable
+private fun SuggestionRow(
+    song: Song,
+    query: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 搜索图标替代封面（联想行更轻量）
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text(
+                text = highlightMatch(song.title, query),
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (song.artist.isNotBlank() && song.artist != "未知艺术家") {
+                Text(
+                    text = song.artist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = "搜索",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+/** 高亮文本中匹配关键词的部分（匹配段用主题色加粗） */
+@Composable
+private fun highlightMatch(text: String, query: String): AnnotatedString {
+    val q = query.trim().lowercase()
+    val lower = text.lowercase()
+    val start = lower.indexOf(q)
+    if (q.isEmpty() || start < 0) return AnnotatedString(text)
+    val end = start + q.length
+    return buildAnnotatedString {
+        append(text, 0, start)
+        withStyle(
+            SpanStyle(
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
+        ) {
+            append(text, start, end)
+        }
+        append(text, end, text.length)
     }
 }
 
