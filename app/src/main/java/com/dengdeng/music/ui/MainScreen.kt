@@ -99,6 +99,15 @@ fun MainScreen(
     var selectedTab by remember { mutableStateOf(0) }
     // 正在查看的歌单（null 表示歌单列表页）
     var viewingPlaylist by remember { mutableStateOf<Playlist?>(null) }
+
+    // 返回键层级："全部"tab 是最基础界面。
+    // 歌单详情 → 先关详情；非"全部"tab（喜欢/最近/歌单）→ 先回"全部"；
+    // 已在"全部"tab → 放行系统返回键（退出到桌面）。
+    // 注意：放在函数体最前（最早注册）→ 优先级最低，不抢占电台/搜索/智能歌单/播放页的返回处理。
+    val tabBackEnabled = viewingPlaylist != null || selectedTab != 0
+    BackHandler(enabled = tabBackEnabled) {
+        if (viewingPlaylist != null) viewingPlaylist = null else selectedTab = 0
+    }
     // 正在查看的专辑（null 表示专辑列表页）
     var viewingAlbum by remember { mutableStateOf<AlbumGroup?>(null) }
     // 联网搜索关键词（非 null 时显示网络搜索界面，覆盖曲库）
