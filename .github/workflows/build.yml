@@ -25,6 +25,14 @@ jobs:
         run: |
           sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
 
+      # 恢复本机 debug keystore（保证签名一致，可覆盖安装不丢数据）
+      - name: Restore debug keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          mkdir -p $HOME/.android
+          echo "$KEYSTORE_B64" | base64 -d > $HOME/.android/debug.keystore
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
