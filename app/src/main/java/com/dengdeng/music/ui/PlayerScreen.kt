@@ -499,7 +499,7 @@ private fun PlayerProgressBar(viewModel: MusicViewModel) {
         GestureSeekBar(
             positionMs = viewModel.currentPositionMs,
             durationMs = duration,
-            onSeek = { viewModel.seekTo(it) },
+            onSeek = { viewModel.seekAndPlay(it) },
             onDragState = { dragging, p ->
                 dragProgress = if (dragging) p else null
             },

@@ -82,8 +82,6 @@ fun GestureSeekBar(
                     val startX = down.position.x
                     var accumulated = 0f
                     var isDrag = false
-                    // 基准 = 按下瞬间的最新播放位置（拇指从当前播放位置出发）
-                    val baseMs = currentPos
 
                     while (true) {
                         val event = awaitPointerEvent()
@@ -91,7 +89,7 @@ fun GestureSeekBar(
                         if (change == null || change.changedToUp()) {
                             if (isDrag) {
                                 // 滑动松手：相对 seek（基准 + 位移比例 * 时长）
-                                val target = baseMs + (accumulated / barWidthPx * currentDur).toLong()
+                                val target = dragStartMs + (accumulated / barWidthPx * currentDur).toLong()
                                 onSeek(target.coerceIn(0L, currentDur.coerceAtLeast(0L)))
                             } else {
                                 // 点击松手：绝对跳转到手指位置
@@ -108,14 +106,15 @@ fun GestureSeekBar(
                             accumulated = newX - startX
                             if (!isDrag && abs(accumulated) > touchSlopPx) {
                                 isDrag = true
-                                dragStartMs = baseMs
+                                // 基准 = 判定时刻最新位置 - 已累计位移（拇指从当前显示位置无缝衔接，避免闪跳）
+                                dragStartMs = currentPos - (accumulated / barWidthPx * currentDur).toLong()
                             }
                             if (isDrag) {
                                 dragDeltaPx = accumulated
                                 isDragging = true
                                 // 实时回调当前显示进度（供时间文字跟随）
                                 val dp = if (currentDur > 0) {
-                                    ((baseMs + (accumulated / barWidthPx * currentDur).toLong()).toFloat() / currentDur).coerceIn(0f, 1f)
+                                    ((dragStartMs + (accumulated / barWidthPx * currentDur).toLong()).toFloat() / currentDur).coerceIn(0f, 1f)
                                 } else 0f
                                 onDragState(true, dp)
                                 change.consume()

@@ -485,6 +485,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         controller?.seekTo(positionMs)
     }
 
+    /** 跳转并播放：暂停时拖动/点按进度条后，seek 到目标位置并开始播放 */
+    fun seekAndPlay(positionMs: Long) {
+        val ctrl = controller ?: return
+        ctrl.seekTo(positionMs)
+        if (!ctrl.isPlaying) ctrl.play()
+    }
+
     /** 当前播放队列（playSong/playSongs 时记录，供 currentSong 精确取歌） */
     private var activeQueue: List<Song> = emptyList()
 

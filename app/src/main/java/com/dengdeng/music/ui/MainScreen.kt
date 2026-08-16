@@ -1309,7 +1309,7 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
             GestureSeekBar(
                 positionMs = viewModel.currentPositionMs,
                 durationMs = viewModel.durationMs,
-                onSeek = { viewModel.seekTo(it) },
+                onSeek = { viewModel.seekAndPlay(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp),
