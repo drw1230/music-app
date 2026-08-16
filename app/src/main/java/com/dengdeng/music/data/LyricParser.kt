@@ -120,6 +120,14 @@ object LyricParser {
         return java.io.File(context.cacheDir, "lyrics/$safeName.lrc")
     }
 
+    /** 清除某首歌的歌词磁盘缓存（"刷新歌词"时调用，强制重新联网获取） */
+    fun clearLyricCache(context: Context, title: String, artist: String) {
+        runCatching {
+            val f = lyricCacheFile(context, title, artist)
+            if (f.exists()) f.delete()
+        }
+    }
+
     /**
      * 通过 MediaStore 查找同名 .lrc 文件
      * 歌曲 Uri → 取所在目录（用 DATA 列，若可读）→ 找 "同名.lrc"

@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,7 +36,8 @@ import kotlinx.coroutines.launch
 fun OnlineSearchScreen(
     query: String,
     onBack: () -> Unit,
-    onDownloaded: () -> Unit = {}
+    onDownloaded: () -> Unit = {},
+    onPlay: (OnlineSong, AudioSource) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -154,6 +156,7 @@ fun OnlineSearchScreen(
                     if (ok) onDownloaded()
                 }
             },
+            onPlay = { source -> onPlay(song, source) },
             onDismiss = { selectedSong = null }
         )
     }
@@ -227,6 +230,7 @@ private fun OnlineSourceSheet(
     song: OnlineSong,
     downloadState: Map<String, String>,
     onDownload: (AudioSource) -> Unit,
+    onPlay: (AudioSource) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var sources by remember(song.id) { mutableStateOf<List<AudioSource>?>(null) }
@@ -351,7 +355,8 @@ private fun OnlineSourceSheet(
                         AudioSourceRow(
                             source = source,
                             state = downloadState["${source.platform}|${source.quality}"],
-                            onClick = { onDownload(source) }
+                            onClick = { onDownload(source) },
+                            onPlay = { onPlay(source) }
                         )
                     }
                 }
@@ -363,19 +368,22 @@ private fun OnlineSourceSheet(
     )
 }
 
-/** 音源条目行：平台 + 品质/格式 + 码率/大小 + 状态按钮 */
+/** 音源条目行：平台 + 品质/格式 + 码率/大小 + 状态按钮（下载 → 播放） */
 @Composable
 private fun AudioSourceRow(
     source: AudioSource,
     state: String?,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onPlay: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-            .clickable(enabled = source.url != null && state == null) { onClick() }
+            .clickable(enabled = source.url != null && (state == null || state == "已下载 ✓")) {
+                if (state == "已下载 ✓") onPlay() else onClick()
+            }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -422,6 +430,11 @@ private fun AudioSourceRow(
         Spacer(Modifier.width(8.dp))
         // 右侧状态/按钮
         when {
+            state != null && state == "已下载 ✓" -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "播放", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(2.dp))
+                Text("播放", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
             state != null -> Text(state, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             source.url == null -> Text("VIP 受限", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE6A23C))
             else -> Row(verticalAlignment = Alignment.CenterVertically) {

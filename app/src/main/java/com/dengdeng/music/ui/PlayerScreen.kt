@@ -92,10 +92,12 @@ fun PlayerScreen(
     }
 
     var showQueue by remember { mutableStateOf(false) }
+    val playerContext = LocalContext.current
     // 歌曲菜单 + 封面选择
     var showSongMenu by remember { mutableStateOf(false) }
     var showCoverPicker by remember { mutableStateOf(false) }
     var coverRefreshToken by remember { mutableStateOf(0) }
+    var lyricRefreshToken by remember { mutableStateOf(0) }
     var coverCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
     // 在线下载状态（null=不显示弹窗）
     var downloadState by remember { mutableStateOf<String?>(null) }
@@ -272,6 +274,21 @@ fun PlayerScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = { Text("刷新歌词/歌手") },
+                            onClick = {
+                                showSongMenu = false
+                                // 清除歌词缓存强制重新联网获取
+                                LyricParser.clearLyricCache(
+                                    playerContext, song.title, song.artist
+                                )
+                                lyricRefreshToken++
+                                // 歌手未知时触发一次联网匹配补全
+                                if (song.artist.isBlank() || song.artist == "未知艺术家") {
+                                    viewModel.enhanceSongMetadata(song)
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("下载歌曲") },
                             onClick = {
                                 showSongMenu = false
@@ -300,7 +317,8 @@ fun PlayerScreen(
                         LyricsView(
                             viewModel = viewModel,
                             song = song,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
+                            refreshToken = lyricRefreshToken
                         )
                     } else {
                         // 旋转封面（带光晕，切歌淡入淡出）
@@ -561,16 +579,17 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean, coverRefreshToken: 
 private fun LyricsView(
     viewModel: MusicViewModel,
     song: Song,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    refreshToken: Int = 0
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
 
-    // 歌词数据（切歌时重新加载）
-    var lyrics by remember(song.id) { mutableStateOf<List<LyricParser.LyricLine>>(emptyList()) }
-    var loading by remember(song.id) { mutableStateOf(true) }
+    // 歌词数据（切歌或 refreshToken 变化时重新加载）
+    var lyrics by remember(song.id, refreshToken) { mutableStateOf<List<LyricParser.LyricLine>>(emptyList()) }
+    var loading by remember(song.id, refreshToken) { mutableStateOf(true) }
 
-    LaunchedEffect(song.id) {
+    LaunchedEffect(song.id, refreshToken) {
         loading = true
         lyrics = LyricParser.loadLyrics(context, song.uri, song.title, song.artist)
         loading = false

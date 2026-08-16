@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
@@ -206,7 +207,15 @@ fun MainScreen(
                     OnlineSearchScreen(
                         query = q,
                         onBack = { onlineSearchQuery = null },
-                        onDownloaded = { viewModel.scanMusic() }
+                        onDownloaded = { viewModel.scanMusic() },
+                        onPlay = { song, source ->
+                            source.url?.let { url ->
+                                viewModel.playOnline(
+                                    song.title, song.artist, url, song.artUrl, song.durationMs
+                                )
+                                showPlayer = true
+                            }
+                        }
                     )
                 }
             }
@@ -300,7 +309,10 @@ fun MainScreen(
                             viewModel = viewModel,
                             onAddToPlaylist = { songForPlaylist = it },
                             onDeleteSongs = onDeleteSongs,
-                            onOnlineSearch = { q -> onlineSearchQuery = q }
+                            onOnlineSearch = { q ->
+                                viewModel.addSearchHistory(q)
+                                onlineSearchQuery = q
+                            }
                         )
                     }
                 }
@@ -458,7 +470,8 @@ private fun PlaylistDetailHeader(
     }
 }
 
-/** 全部歌曲列表（带搜索框 + 智能联想 + 联网搜索入口） */
+/** 全部歌曲列表（带搜索框 + 智能联想 + 搜索历史 + 联网搜索入口） */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SongList(
     viewModel: MusicViewModel,
@@ -505,6 +518,49 @@ private fun SongList(
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp)
             )
+        }
+        // 搜索历史区（搜索框为空时显示，点击可再次搜索）
+        if (query.isBlank() && viewModel.searchHistory.isNotEmpty()) {
+            item {
+                Column(Modifier.padding(horizontal = 20.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "搜索历史",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            "清空",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { viewModel.clearSearchHistory() }
+                        )
+                    }
+                    // 历史词标签流式排列
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        viewModel.searchHistory.forEach { word ->
+                            Text(
+                                text = word,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                    .clickable {
+                                        query = word
+                                        suggestOpen = true
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
         }
         // 智能联想区：输入关键词时显示匹配的歌曲名建议
         if (query.isNotBlank() && suggestOpen && suggestions.isNotEmpty()) {

@@ -2,6 +2,7 @@ package com.dengdeng.music.data
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -21,6 +22,10 @@ object UserLibraryStore {
 
     private val KEY_FAVORITES = stringPreferencesKey("favorites_json")     // 收藏的歌曲 ID 集合
     private val KEY_PLAYLISTS = stringPreferencesKey("playlists_json")     // 歌单列表 JSON
+    private val KEY_METADATA = stringPreferencesKey("metadata_overrides_json") // 元数据修正映射（songId → title|artist）
+    private val KEY_SORT_MODE = intPreferencesKey("sort_mode")              // 排序方式记忆
+    private val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history_json") // 搜索历史
+    private val KEY_PLAY_HISTORY = stringPreferencesKey("play_history_json") // 播放历史（songId → 次数）
 
     // ==================== 收藏 ====================
 
@@ -95,6 +100,107 @@ object UserLibraryStore {
         }
     }
 
+    // ==================== 元数据修正（歌手/歌名整理） ====================
+
+    /** 全部元数据修正映射（songId → (title, artist)） */
+    fun metadataOverridesFlow(context: Context): Flow<Map<Long, Pair<String, String>>> =
+        context.dataStore.data.map { prefs -> parseMetadata(prefs[KEY_METADATA] ?: "{}") }
+
+    /** 保存一条元数据修正 */
+    suspend fun saveMetadataOverride(context: Context, songId: Long, title: String, artist: String) {
+        val map = metadataOverridesFlow(context).first().toMutableMap()
+        map[songId] = title to artist
+        saveMetadata(context, map)
+    }
+
+    private suspend fun saveMetadata(context: Context, map: Map<Long, Pair<String, String>>) {
+        val obj = JSONObject()
+        map.forEach { (id, pair) ->
+            val item = JSONObject().put("title", pair.first).put("artist", pair.second)
+            obj.put(id.toString(), item)
+        }
+        context.dataStore.edit { prefs -> prefs[KEY_METADATA] = obj.toString() }
+    }
+
+    private fun parseMetadata(raw: String): Map<Long, Pair<String, String>> {
+        return try {
+            val obj = JSONObject(raw)
+            val result = mutableMapOf<Long, Pair<String, String>>()
+            obj.keys().forEach { key ->
+                val item = obj.optJSONObject(key) ?: return@forEach
+                result[key.toLongOrNull() ?: return@forEach] =
+                    (item.optString("title", "") to item.optString("artist", ""))
+            }
+            result
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    // ==================== 排序方式记忆 ====================
+
+    /** 上次使用的排序方式（默认 0=按歌名） */
+    suspend fun getSortMode(context: Context): Int =
+        context.dataStore.data.map { prefs -> prefs[KEY_SORT_MODE] ?: 0 }.first()
+
+    suspend fun saveSortMode(context: Context, mode: Int) {
+        context.dataStore.edit { prefs -> prefs[KEY_SORT_MODE] = mode }
+    }
+
+    // ==================== 搜索历史 ====================
+
+    /** 搜索历史（最新在前，最多 10 条） */
+    fun searchHistoryFlow(context: Context): Flow<List<String>> =
+        context.dataStore.data.map { prefs -> parseStringList(prefs[KEY_SEARCH_HISTORY] ?: "[]") }
+
+    /** 新增一条搜索历史 */
+    suspend fun addSearchHistory(context: Context, query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) return
+        val list = searchHistoryFlow(context).first().toMutableList()
+        list.remove(q)              // 去重
+        list.add(0, q)              // 最新在前
+        if (list.size > 10) list.subList(10, list.size).clear()
+        context.dataStore.edit { prefs -> prefs[KEY_SEARCH_HISTORY] = stringListToJson(list) }
+    }
+
+    /** 清空搜索历史 */
+    suspend fun clearSearchHistory(context: Context) {
+        context.dataStore.edit { prefs -> prefs[KEY_SEARCH_HISTORY] = "[]" }
+    }
+
+    // ==================== 播放历史 ====================
+
+    /** 播放历史（songId → 播放次数，Flow） */
+    fun playHistoryFlow(context: Context): Flow<Map<Long, Int>> =
+        context.dataStore.data.map { prefs -> parsePlayHistory(prefs[KEY_PLAY_HISTORY] ?: "{}") }
+
+    /** 记录一次播放 */
+    suspend fun addPlayRecord(context: Context, songId: Long) {
+        val map = playHistoryFlow(context).first().toMutableMap()
+        map[songId] = (map[songId] ?: 0) + 1
+        context.dataStore.edit { prefs -> prefs[KEY_PLAY_HISTORY] = playHistoryToJson(map) }
+    }
+
+    private fun parsePlayHistory(raw: String): Map<Long, Int> {
+        return try {
+            val obj = JSONObject(raw)
+            val result = mutableMapOf<Long, Int>()
+            obj.keys().forEach { key ->
+                result[key.toLongOrNull() ?: return@forEach] = obj.optInt(key, 0)
+            }
+            result
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun playHistoryToJson(map: Map<Long, Int>): String {
+        val obj = JSONObject()
+        map.forEach { (id, count) -> obj.put(id.toString(), count) }
+        return obj.toString()
+    }
+
     // ==================== 序列化 ====================
 
     private suspend fun savePlaylists(context: Context, lists: List<Playlist>) {
@@ -139,6 +245,21 @@ object UserLibraryStore {
         } catch (e: Exception) {
             emptySet()
         }
+    }
+
+    private fun parseStringList(raw: String): List<String> {
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun stringListToJson(list: List<String>): String {
+        val arr = JSONArray()
+        list.forEach { arr.put(it) }
+        return arr.toString()
     }
 
     private fun longSetToJson(ids: Set<Long>): String {

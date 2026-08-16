@@ -10,10 +10,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import com.dengdeng.music.data.AlbumGroup
+import com.dengdeng.music.data.MetadataEnhancer
 import com.dengdeng.music.data.MusicRepository
 import com.dengdeng.music.data.Playlist
 import com.dengdeng.music.data.Song
 import com.dengdeng.music.data.UserLibraryStore
+import kotlinx.coroutines.flow.first
 import com.dengdeng.music.player.PlaybackService
 import com.dengdeng.music.player.PlayerControllerProvider
 import com.google.common.util.concurrent.MoreExecutors
@@ -82,6 +84,37 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         sortMode = mode
         // 切到乱序时重新打乱；切出乱序时清空缓存
         if (mode == 4) shuffleCache = null
+        // 持久化排序方式（重启后保持）
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            runCatching { UserLibraryStore.saveSortMode(ctx, mode) }
+        }
+    }
+
+    // ==================== 搜索历史 ====================
+
+    /** 搜索历史（最新在前，最多 10 条） */
+    var searchHistory by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** 记录一条搜索（联网搜索/回车时调用） */
+    fun addSearchHistory(query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) return
+        searchHistory = (listOf(q) + searchHistory.filter { it != q }).take(10)
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            runCatching { UserLibraryStore.addSearchHistory(ctx, q) }
+        }
+    }
+
+    /** 清空搜索历史 */
+    fun clearSearchHistory() {
+        searchHistory = emptyList()
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            runCatching { UserLibraryStore.clearSearchHistory(ctx) }
+        }
     }
 
     /**
@@ -131,9 +164,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     var playHistory by mutableStateOf<Map<Long, Int>>(emptyMap())
         private set
 
-    /** 记录一次播放（切换歌曲时调用） */
+    /** 记录一次播放（切换歌曲时调用；持久化到 DataStore，重启后保留） */
     fun recordPlay(songId: Long) {
+        if (songId <= 0) return
         playHistory = playHistory + (songId to (playHistory[songId] ?: 0) + 1)
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            runCatching { UserLibraryStore.addPlayRecord(ctx, songId) }
+        }
     }
 
     /** 最近播放的歌曲列表（按历史顺序倒序） */
@@ -221,6 +259,47 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // 加载收藏和歌单
         loadFavorites()
         loadPlaylists()
+        // 恢复记忆：排序方式 + 播放历史 + 搜索历史（跨重启保持）
+        viewModelScope.launch {
+            runCatching {
+                sortMode = UserLibraryStore.getSortMode(context)
+                playHistory = UserLibraryStore.playHistoryFlow(context).first()
+                searchHistory = UserLibraryStore.searchHistoryFlow(context).first()
+            }
+        }
+    }
+
+    /** 在线播放（下载完成后播放音源 URL，进入播放界面） */
+    fun playOnline(title: String, artist: String, url: String, artUrl: String?, durationMs: Long) {
+        val ctrl = controller ?: return
+        val info = PlaybackService.SongInfo(
+            id = -1L,
+            title = title,
+            artist = artist,
+            album = "在线音乐",
+            uri = url,
+            albumArtUri = artUrl,
+            durationMs = durationMs
+        )
+        val items = PlaybackService.buildMediaItems(listOf(info))
+        activeQueue = emptyList()
+        currentIndex = 0
+        ctrl.setMediaItems(items, 0, 0L)
+        ctrl.prepare()
+        ctrl.play()
+    }
+
+    /** 单曲元数据增强（"刷新歌词/歌手"触发：整理歌手名/联网补全歌手） */
+    fun enhanceSongMetadata(song: Song) {
+        viewModelScope.launch {
+            val ctx = getApplication<Application>()
+            val enhanced = withContext(Dispatchers.IO) {
+                MetadataEnhancer.enhanceOne(ctx, song)
+            }
+            if (enhanced != null) {
+                songs = songs.map { if (it.id == song.id) enhanced else it }
+            }
+        }
     }
 
     /** 监听播放器状态变化，同步到 UI */
@@ -438,7 +517,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         ctrl.addMediaItem(finalIndex.coerceAtLeast(0), mediaItem)
     }
 
-    /** 扫描本地音乐 */
+    /** 扫描本地音乐（扫描后自动做元数据匹配：整理歌手名 + 无歌手联网补全） */
     fun scanMusic() {
         val context = getApplication<Application>()
         isLoading = true
@@ -448,6 +527,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
             songs = result
             isLoading = false
+            // 后台增强元数据（不阻塞显示；已匹配的持久化跳过，不会重复处理）
+            MetadataEnhancer.clearCache()
+            viewModelScope.launch {
+                val enhanced = MetadataEnhancer.enhanceAll(context, result)
+                if (enhanced != result) songs = enhanced
+            }
         }
     }
 
