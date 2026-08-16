@@ -46,7 +46,8 @@ object MusicRepository {
             MediaStore.Audio.Media.TRACK,
             MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.SIZE,
-            MediaStore.Audio.Media.DISPLAY_NAME
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.DATE_ADDED
         )
 
         // 数据库层过滤：必须是音乐标记 + 时长达标 + 不是铃声/闹钟/通知音/播客
@@ -76,6 +77,7 @@ object MusicRepository {
             val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
             val displayNameCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+            val dateAddedCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -87,6 +89,7 @@ object MusicRepository {
                 val albumId = cursor.getLong(albumIdCol)
                 val size = cursor.getLong(sizeCol)
                 val displayName = cursor.getString(displayNameCol) ?: title
+                val dateAdded = cursor.getLong(dateAddedCol)
 
                 // ===== 代码层二次过滤 =====
                 // 1. 时长兜底（数据库层已过滤，这里防部分设备查询异常）
@@ -119,7 +122,8 @@ object MusicRepository {
                         uri = contentUri,
                         albumArtUri = albumArtUri,
                         trackNumber = track,
-                        albumId = albumId
+                        albumId = albumId,
+                        dateAdded = dateAdded
                     )
                 )
             }

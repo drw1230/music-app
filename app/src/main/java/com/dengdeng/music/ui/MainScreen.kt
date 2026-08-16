@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,6 +59,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -195,15 +198,21 @@ fun MainScreen(
         }
     ) { padding ->
         when {
-            !hasPermission -> PermissionHint(Modifier.padding(padding))
-            viewModel.isLoading -> LoadingView(Modifier.padding(padding))
-            viewModel.songs.isEmpty() -> EmptyView(Modifier.padding(padding))
-            // 联网搜索界面（覆盖整个曲库区，含 Tab 栏）
+            // 联网搜索界面（覆盖整个曲库区，优先级最高，避免下载后重扫顶掉界面）
             onlineSearchQuery != null -> {
                 val q = onlineSearchQuery!!
                 BackHandler { onlineSearchQuery = null }
-                OnlineSearchScreen(query = q, onBack = { onlineSearchQuery = null })
+                Box(Modifier.padding(padding)) {
+                    OnlineSearchScreen(
+                        query = q,
+                        onBack = { onlineSearchQuery = null },
+                        onDownloaded = { viewModel.scanMusic() }
+                    )
+                }
             }
+            !hasPermission -> PermissionHint(Modifier.padding(padding))
+            viewModel.isLoading -> LoadingView(Modifier.padding(padding))
+            viewModel.songs.isEmpty() -> EmptyView(Modifier.padding(padding))
             else -> {
                 // Tab 栏 + 内容
                 Column(Modifier.padding(padding)) {
@@ -312,7 +321,7 @@ fun MainScreen(
 
     // 排序菜单（AlertDialog 形式）
     if (sortMenuExpanded) {
-        val sortNames = listOf("按歌名", "按艺术家", "按时长")
+        val sortNames = listOf("按歌名", "按艺术家", "按时长", "最近添加", "乱序")
         AlertDialog(
             onDismissRequest = { sortMenuExpanded = false },
             title = { Text("排序方式") },
@@ -475,7 +484,7 @@ private fun SongList(
         contentPadding = PaddingValues(bottom = 16.dp)
     ) {
         item {
-            // 搜索框
+            // 搜索框（输入联想 + 回车/点击搜索直接联网搜索）
             OutlinedTextField(
                 value = query,
                 onValueChange = {
@@ -486,6 +495,12 @@ private fun SongList(
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(24.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = {
+                        if (query.isNotBlank()) onOnlineSearch(query.trim())
+                    }
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp)
@@ -506,8 +521,8 @@ private fun SongList(
                             song = song,
                             query = query.trim(),
                             onClick = {
-                                query = song.title
-                                suggestOpen = false
+                                // 点击联想歌曲 → 直接进入该歌曲的联网搜索界面
+                                onOnlineSearch(song.title)
                             }
                         )
                     }

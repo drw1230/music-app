@@ -34,7 +34,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun OnlineSearchScreen(
     query: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onDownloaded: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -150,6 +151,7 @@ fun OnlineSearchScreen(
                         context, url, song.title, song.artist
                     )
                     downloadState = downloadState + (key to if (ok) "已下载 ✓" else "下载失败")
+                    if (ok) onDownloaded()
                 }
             },
             onDismiss = { selectedSong = null }

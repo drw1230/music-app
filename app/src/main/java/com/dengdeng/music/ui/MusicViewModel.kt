@@ -39,8 +39,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 搜索关键词（空表示不搜索） */
     var searchQuery by mutableStateOf("")
 
-    /** 排序方式：0=歌名 1=艺术家 2=时长 3=最近添加 */
+    /** 排序方式：0=歌名 1=艺术家 2=时长 3=最近添加 4=乱序 */
     var sortMode by mutableStateOf(0)
+
+    // 乱序结果缓存（切到乱序时打乱一次并固定，避免每次重组都重新随机导致列表跳动）
+    private var shuffleCache: List<Song>? = null
 
     /** 搜索结果（按关键词过滤 + 排序后的歌曲） */
     val filteredSongs: List<Song>
@@ -59,6 +62,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return when (sortMode) {
                 1 -> filtered.sortedBy { it.artist.lowercase() }
                 2 -> filtered.sortedByDescending { it.durationMs }
+                3 -> filtered.sortedByDescending { it.dateAdded }  // 最近添加
+                4 -> {                                          // 乱序（固定随机顺序）
+                    val cached = shuffleCache
+                    if (cached != null && cached.size == filtered.size) {
+                        cached
+                    } else {
+                        val shuffled = filtered.shuffled()
+                        shuffleCache = shuffled
+                        shuffled
+                    }
+                }
                 else -> filtered.sortedBy { it.title.lowercase() }
             }
         }
@@ -66,6 +80,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 设置排序方式 */
     fun changeSortMode(mode: Int) {
         sortMode = mode
+        // 切到乱序时重新打乱；切出乱序时清空缓存
+        if (mode == 4) shuffleCache = null
     }
 
     /**
