@@ -386,13 +386,36 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // 加载收藏和歌单
         loadFavorites()
         loadPlaylists()
-        // 恢复记忆：排序方式 + 播放历史 + 搜索历史 + 歌词偏移（跨重启保持）
+        // 恢复记忆：排序方式 + 播放历史 + 搜索历史 + 歌词偏移 + 跳过歌（跨重启保持）
         viewModelScope.launch {
             runCatching {
                 sortMode = UserLibraryStore.getSortMode(context)
                 playHistory = UserLibraryStore.playHistoryFlow(context).first()
                 searchHistory = UserLibraryStore.searchHistoryFlow(context).first()
                 lyricOffsets = UserLibraryStore.lyricOffsetsFlow(context).first()
+                skipSongs = UserLibraryStore.skipListFlow(context).first()
+            }
+        }
+    }
+
+    // ==================== 电台负反馈 ====================
+
+    /** 跳过歌集合（"歌名|歌手"，播放 <10s 就被切走即记录；电台推荐时过滤） */
+    var skipSongs by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** 记录上一次切走的歌（用于判断 10 秒内切歌） */
+    private var lastSongKey: String? = null
+
+    /** 记录跳过（切歌时由播放监听调用，播放不足 10 秒视为不喜欢） */
+    private fun recordSkipIfTooFast(currentPosMs: Long) {
+        val key = lastSongKey ?: return
+        if (currentPosMs in 1 until 10_000) {   // 播放 <10s 就切走
+            if (key in skipSongs) return
+            skipSongs = skipSongs + key
+            val ctx = getApplication<Application>()
+            viewModelScope.launch {
+                runCatching { UserLibraryStore.addSkipSong(ctx, key) }
             }
         }
     }
@@ -447,23 +470,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) { }
     }
 
-    /** 在线播放（下载完成后播放音源 URL，进入播放界面） */
+    /** 在线播放单曲（试听/下载后播放；迷你条显示，不进全屏） */
     fun playOnline(title: String, artist: String, url: String, artUrl: String?, durationMs: Long) {
-        val ctrl = controller ?: return
-        val info = PlaybackService.SongInfo(
-            id = -1L,
-            title = title,
-            artist = artist,
-            album = "在线试听",
-            uri = url,
-            albumArtUri = artUrl,
-            durationMs = durationMs
-        )
-        val items = PlaybackService.buildMediaItems(listOf(info))
-        activeQueue = emptyList()
-        currentIndex = 0
-        // 记录在线试听状态（迷你条显示用；本地播放时清除）
-        onlineNowPlaying = Song(
+        val song = Song(
             id = -1L,
             title = title,
             artist = artist,
@@ -472,6 +481,28 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             uri = android.net.Uri.parse(url),
             albumArtUri = artUrl?.let { android.net.Uri.parse(it) }
         )
+        playOnlineQueue(listOf(song))
+    }
+
+    /** 在线队列播放（电台/批量：多首在线流，可切歌） */
+    fun playOnlineQueue(songs: List<Song>) {
+        if (songs.isEmpty()) return
+        val ctrl = controller ?: return
+        val infos = songs.map { song ->
+            PlaybackService.SongInfo(
+                id = song.id,
+                title = song.title,
+                artist = song.artist,
+                album = song.album,
+                uri = song.uri.toString(),
+                albumArtUri = song.albumArtUri?.toString(),
+                durationMs = song.durationMs
+            )
+        }
+        val items = PlaybackService.buildMediaItems(infos)
+        activeQueue = emptyList()
+        onlineQueue = songs
+        currentIndex = 0
         ctrl.setMediaItems(items, 0, 0L)
         ctrl.prepare()
         ctrl.play()
@@ -517,6 +548,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // 电台负反馈：上一首播放 <10s 就切走 → 记录跳过（currentPositionMs 此时还是上一首的位置）
+            recordSkipIfTooFast(currentPositionMs)
+            // 记录当前歌 key（供下次切歌判断）
+            lastSongKey = mediaItem?.mediaMetadata?.title?.toString()?.let { t ->
+                val a = mediaItem.mediaMetadata.artist?.toString() ?: ""
+                "$t|$a"
+            }
             currentIndex = controller?.currentMediaItemIndex ?: -1
             syncDuration()
             // 记录播放历史（切歌/开始播放时）
@@ -706,7 +744,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun playSongs(songs: List<Song>, startIndex: Int = 0) {
         if (songs.isEmpty()) return
         val ctrl = controller ?: return
-        onlineNowPlaying = null
+        onlineQueue = emptyList()
         activeQueue = songs
         val songInfos = songs.map { song ->
             PlaybackService.SongInfo(
@@ -780,7 +818,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val songList = filteredSongs
         if (songList.isEmpty() || index !in songList.indices) return
         val ctrl = controller ?: return
-        onlineNowPlaying = null
+        onlineQueue = emptyList()
         activeQueue = songList
 
         val songInfos = songList.map { song ->
@@ -861,12 +899,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 当前播放队列（playSong/playSongs 时记录，供 currentSong 精确取歌） */
     private var activeQueue: List<Song> = emptyList()
 
-    /** 在线试听中的歌曲（playOnline 时设置，本地播放时清除；迷你条用它显示在线试听内容） */
-    var onlineNowPlaying by mutableStateOf<Song?>(null)
+    /** 在线播放队列（playOnline/playOnlineQueue 设置，本地播放时清空；迷你条显示在线内容） */
+    var onlineQueue by mutableStateOf<List<Song>>(emptyList())
         private set
 
-    /** 当前显示的歌曲（在线试听优先，否则本地播放队列） */
-    fun nowPlayingSong(): Song? = onlineNowPlaying ?: currentSong()
+    /** 当前是否在线播放 */
+    val isOnlinePlaying: Boolean get() = onlineQueue.isNotEmpty()
+
+    /** 当前显示的歌曲（在线队列优先，否则本地播放队列） */
+    fun nowPlayingSong(): Song? =
+        if (onlineQueue.isNotEmpty()) onlineQueue.getOrNull(currentIndex) else currentSong()
 
     /** 获取当前播放歌曲信息（供 UI 显示）—— 从实际播放队列取，避免索引错位 */
     fun currentSong(): Song? {

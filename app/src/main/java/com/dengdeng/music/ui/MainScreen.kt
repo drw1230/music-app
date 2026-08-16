@@ -94,6 +94,8 @@ fun MainScreen(
     var viewingAlbum by remember { mutableStateOf<AlbumGroup?>(null) }
     // 联网搜索关键词（非 null 时显示网络搜索界面，覆盖曲库）
     var onlineSearchQuery by remember { mutableStateOf<String?>(null) }
+    // 每日电台开关
+    var showRadio by remember { mutableStateOf(false) }
     // 待添加到歌单的歌曲 ID（非 null 时显示选择弹窗）
     var songForPlaylist by remember { mutableStateOf<Long?>(null) }
     // 右上角更多菜单
@@ -119,6 +121,18 @@ fun MainScreen(
             TopAppBar(
                 title = { Text("DDmusic") },
                 actions = {
+                    // 每日电台入口（标题旁，主题色按钮）
+                    Text(
+                        text = "电台",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .clickable { showRadio = true }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
                     // 右上角更多菜单
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
@@ -194,17 +208,27 @@ fun MainScreen(
         },
         bottomBar = {
             if (viewModel.nowPlayingSong() != null) {
-                MiniPlayerBar(
-                    viewModel,
-                    onClick = {
-                        // 在线试听不进全屏播放界面（仅迷你条试听）
-                        if (viewModel.onlineNowPlaying == null) showPlayer = true
-                    }
-                )
+                    MiniPlayerBar(
+                        viewModel,
+                        onClick = {
+                            // 在线试听不进全屏播放界面（仅迷你条试听）
+                            if (viewModel.onlineQueue.isEmpty()) showPlayer = true
+                        }
+                    )
             }
         }
     ) { padding ->
         when {
+            // 每日电台界面（覆盖整个曲库区）
+            showRadio -> {
+                BackHandler { showRadio = false }
+                Box(Modifier.padding(padding)) {
+                    OnlineRadioScreen(
+                        viewModel = viewModel,
+                        onBack = { showRadio = false }
+                    )
+                }
+            }
             // 联网搜索界面（覆盖整个曲库区，优先级最高，避免下载后重扫顶掉界面）
             onlineSearchQuery != null -> {
                 val q = onlineSearchQuery!!
@@ -1549,7 +1573,7 @@ private fun EqualizerIcon(tint: Color) {
 @Composable
 private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
     val song = viewModel.nowPlayingSong() ?: return
-    val isOnline = viewModel.onlineNowPlaying != null
+    val isOnline = viewModel.isOnlinePlaying
 
     Surface(
         tonalElevation = 3.dp,

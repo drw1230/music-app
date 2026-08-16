@@ -31,6 +31,7 @@ object UserLibraryStore {
     private val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")          // 循环模式记忆
     private val KEY_SHUFFLE = booleanPreferencesKey("shuffle_mode")         // 乱序播放记忆
     private val KEY_LYRIC_OFFSET = stringPreferencesKey("lyric_offset_json") // 歌词微调偏移（songId → ms）
+    private val KEY_SKIP_LIST = stringPreferencesKey("skip_list_json")     // 电台负反馈：10秒内切走的歌（title|artist）
 
     /** 上次播放信息 */
     data class LastPlay(val songId: Long, val positionMs: Long, val isPlaying: Boolean)
@@ -277,6 +278,30 @@ object UserLibraryStore {
         val obj = JSONObject()
         map.forEach { (id, off) -> obj.put(id.toString(), off) }
         context.dataStore.edit { prefs -> prefs[KEY_LYRIC_OFFSET] = obj.toString() }
+    }
+
+    // ==================== 电台负反馈（跳过歌） ====================
+
+    /** 跳过歌集合（"歌名|歌手"，10秒内切走即记录，电台推荐时过滤） */
+    fun skipListFlow(context: Context): Flow<Set<String>> =
+        context.dataStore.data.map { prefs ->
+            val raw = prefs[KEY_SKIP_LIST] ?: "[]"
+            try {
+                val arr = JSONArray(raw)
+                (0 until arr.length()).map { arr.getString(it) }.toSet()
+            } catch (e: Exception) {
+                emptySet()
+            }
+        }
+
+    /** 追加跳过歌 */
+    suspend fun addSkipSong(context: Context, key: String) {
+        val set = skipListFlow(context).first().toMutableSet()
+        if (set.add(key)) {
+            val arr = JSONArray()
+            set.forEach { arr.put(it) }
+            context.dataStore.edit { prefs -> prefs[KEY_SKIP_LIST] = arr.toString() }
+        }
     }
 
     // ==================== 序列化 ====================

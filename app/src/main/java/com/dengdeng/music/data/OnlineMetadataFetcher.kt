@@ -662,4 +662,118 @@ object OnlineMetadataFetcher {
             null
         }
     }
+
+    // ==================== 热歌榜 / 电台 ====================
+
+    /**
+     * 获取热门歌曲（网易云热歌榜 + QQ 热歌榜 双榜合并）
+     * @param limit 每榜取多少首（合并去重后约 2×limit）
+     */
+    suspend fun fetchHotSongs(limit: Int = 20): List<OnlineSong> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<OnlineSong>()
+
+        // —— 网易云热歌榜（歌单 3778678）——
+        try {
+            val url = URL("https://music.163.com/api/playlist/detail?id=3778678&updateTime=-1")
+            val json = httpGet(url)
+            val tracks = json?.optJSONObject("result")?.optJSONArray("tracks")
+            if (tracks != null) {
+                var count = 0
+                for (i in 0 until tracks.length()) {
+                    if (count >= limit) break
+                    val s = tracks.optJSONObject(i) ?: continue
+                    val id = s.optLong("id", 0L)
+                    if (id <= 0L) continue
+                    val artistsArr = s.optJSONArray("artists")
+                    val artist = artistsArr
+                        ?.takeIf { it.length() > 0 }
+                        ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+                    var artUrl = s.optJSONObject("album")?.optString("picUrl", null)?.takeIf { it.isNotBlank() }
+                    if (artUrl == null && artistsArr != null && artistsArr.length() > 0) {
+                        artUrl = artistsArr.optJSONObject(0)?.optString("img1v1Url", null)?.takeIf { it.isNotBlank() }
+                    }
+                    results.add(
+                        OnlineSong(
+                            platform = "网易云",
+                            id = id.toString(),
+                            title = s.optString("name", ""),
+                            artist = artist,
+                            album = s.optJSONObject("album")?.optString("name", "") ?: "",
+                            artUrl = artUrl,
+                            durationMs = s.optLong("duration", 0L)
+                        )
+                    )
+                    count++
+                }
+            }
+        } catch (e: Exception) { }
+
+        // —— QQ 热歌榜（topid=4）——
+        try {
+            val url = URL("https://c.y.qq.com/v8/fcg-bin/fcg_v8_toplist_cp.fcg?topid=4&format=json&page=detail&type=top&tpl=3")
+            val json = httpGetWithHeaders(url)
+            val songlist = json?.optJSONArray("songlist")
+            if (songlist != null) {
+                var count = 0
+                for (i in 0 until songlist.length()) {
+                    if (count >= limit) break
+                    val d = songlist.optJSONObject(i)?.optJSONObject("data") ?: continue
+                    val songmid = d.optString("songmid", "")
+                    if (songmid.isBlank()) continue
+                    val singers = d.optJSONArray("singer")
+                    val artist = singers
+                        ?.takeIf { it.length() > 0 }
+                        ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+                    results.add(
+                        OnlineSong(
+                            platform = "QQ音乐",
+                            id = songmid,
+                            title = d.optString("songname", ""),
+                            artist = artist,
+                            album = d.optString("albumname", ""),
+                            artUrl = d.optString("albummid", "").takeIf { it.isNotBlank() }?.let { qqAlbumArtUrl(it) },
+                            durationMs = d.optLong("interval", 0L) * 1000L
+                        )
+                    )
+                    count++
+                }
+            }
+        } catch (e: Exception) { }
+
+        // 去重（歌名|歌手）
+        val dedup = LinkedHashMap<String, OnlineSong>()
+        for (s in results) {
+            val k = "${s.title}|${s.artist}".lowercase()
+            if (!dedup.containsKey(k)) dedup[k] = s
+        }
+        return@withContext dedup.values.toList()
+    }
+
+    /**
+     * 解析单曲的可用播放 URL（按平台单请求，供电台/试听快速取流）
+     * 优先 高品（网易云 320k / QQ M800 / 酷狗 320k），失败降级标准
+     */
+    suspend fun resolveOnlineUrl(song: OnlineSong): String? = withContext(Dispatchers.IO) {
+        when (song.platform) {
+            "网易云" -> {
+                val id = song.id.toLongOrNull() ?: 0L
+                if (id <= 0L) return@withContext null
+                neteaseAudioSource(id, 320000, "高品", "MP3", 1L)?.url
+                    ?: neteaseAudioSource(id, 128000, "标准", "MP3", 1L)?.url
+            }
+            "QQ音乐" -> {
+                qqAudioSource(song.id, "M800", "高品", "MP3", 1L)?.url
+                    ?: qqAudioSource(song.id, "M500", "标准", "MP3", 1L)?.url
+            }
+            "酷狗" -> {
+                val info = parseKugouExtra(song)
+                val hq = info?.hqHash ?: ""
+                val norm = info?.hash ?: song.id
+                if (hq.isNotBlank()) kugouAudioSource(hq, "高品", "MP3", 320000, 0L, 1L)?.url
+                    ?: kugouAudioSource(norm, "标准", "MP3", 128000, 0L, 1L)?.url
+                else kugouAudioSource(norm, "标准", "MP3", 128000, 0L, 1L)?.url
+            }
+            else -> null
+        }
+    }
 }

@@ -164,7 +164,7 @@ fun OnlineSearchScreen(
 
 /** 联网搜索结果行：封面 + 歌名/歌手 + 来源标签 + 时长 */
 @Composable
-private fun OnlineSongRow(
+internal fun OnlineSongRow(
     song: OnlineSong,
     onClick: () -> Unit
 ) {
@@ -478,7 +478,7 @@ private fun formatSize(bytes: Long): String {
 }
 
 /** 时长格式化 mm:ss */
-private fun formatMs(ms: Long): String {
+internal fun formatMs(ms: Long): String {
     if (ms <= 0) return "--:--"
     val totalSec = ms / 1000
     val m = totalSec / 60
@@ -487,7 +487,7 @@ private fun formatMs(ms: Long): String {
 }
 
 /** 平台主题色：网易云红 / QQ 绿 / 酷狗蓝 */
-private fun platformColor(platform: String): Color = when (platform) {
+internal fun platformColor(platform: String): Color = when (platform) {
     "网易云" -> Color(0xFFC20C0C)
     "QQ音乐" -> Color(0xFF31C27C)
     "酷狗" -> Color(0xFF2F7DF6)
