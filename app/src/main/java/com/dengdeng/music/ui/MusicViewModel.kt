@@ -177,6 +177,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 null
             }
             controller?.addListener(playerListener)
+            // 启动进度轮询（始终运行：播放/暂停/拖动都实时刷新位置，保证歌词与进度同步）
+            updatePositionPolling()
         }, MoreExecutors.directExecutor())
 
         // 加载收藏和歌单
@@ -212,20 +214,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         durationMs = controller?.duration ?: 0L
     }
 
-    /** 根据播放状态启停进度轮询（每 500ms 刷新一次） */
+    /** 进度轮询（始终运行，200ms 刷新一次；暂停/拖动时也实时更新，歌词高亮与进度保持同步） */
     private fun updatePositionPolling() {
-        if (isPlaying) {
-            if (positionJob == null) {
-                positionJob = viewModelScope.launch {
-                    while (isActive) {
-                        currentPositionMs = controller?.currentPosition ?: 0L
-                        delay(500)
-                    }
+        if (positionJob == null) {
+            positionJob = viewModelScope.launch {
+                while (isActive) {
+                    currentPositionMs = controller?.currentPosition ?: 0L
+                    delay(200)
                 }
             }
-        } else {
-            positionJob?.cancel()
-            positionJob = null
         }
     }
 

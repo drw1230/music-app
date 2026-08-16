@@ -151,12 +151,17 @@ fun PlayerScreen(
                     onDragEnd = {
                         scope.launch {
                             if (dragY.value > dismissThreshold) {
-                                dragY.animateTo(
-                                    1600f,
-                                    animationSpec = tween(200)
-                                )
-                                onClose()
+                                // 下滑 → 下一首
+                                dragY.animateTo(1600f, animationSpec = tween(200))
+                                viewModel.next()
+                                dragY.snapTo(0f)
+                            } else if (dragY.value < -dismissThreshold) {
+                                // 上滑 → 上一首
+                                dragY.animateTo(-1600f, animationSpec = tween(200))
+                                viewModel.previous()
+                                dragY.snapTo(0f)
                             } else {
+                                // 回弹
                                 dragY.animateTo(0f, animationSpec = spring())
                             }
                         }
