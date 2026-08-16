@@ -43,12 +43,18 @@
 - ✅ **仓库已改 Private**（匿名访问 404 即此原因）
 - APK 本地位置：`E:\tmp\ci-logs\apk\app-debug.apk`（最新 c4446a0）
 
-## 四、构建环境（重要！本机已改云端）
+## 四、构建环境（重要！2026-08-16 16:40 更新：容器构建已替代云端）
 
-- **本机 Gradle 构建 12:06 起彻底异常**：`Failed to load native library 'native-platform.dll'`（Gradle 写 .lock 被系统"拒绝访问"），重启×4/坚果云全停/Defender 关闭均无效 → **改用 GitHub Actions 云端构建**
-- **以后构建流程**：改代码 → `git push`（SSH，免 token）→ Actions 自动构建（**已加依赖缓存，二次构建 3-4 分钟**）→ 下载 artifact → adb 安装
+- **本机 Gradle 构建 12:06 起彻底异常**：`Failed to load native library 'native-platform.dll'`（Gradle 写 .lock 被系统"拒绝访问"），重启×4/坚果云全停/Defender 关闭均无效 → 本机构建永久放弃
+- **✅ 新主流程（2026-08-16 搭好）：WSL2 容器构建**，与 Windows 驱动层完全隔离
+  - 一键命令（Windows）：`build.bat`（仅构建）或 `build.bat install`（构建+adb 装手机）
+  - 原理：WSL2 Ubuntu-2404 内构建（/opt/music-app + /root/.gradle 全在 ext4），rsync 同步源码，APK 拷回 `D:\dev\music-app\app\build\outputs\apk\debug\`
+  - 性能：**增量构建 7 秒**（首次 2m34s 含依赖下载）；无改动 1-2s
+  - 工具链：JDK21（apt）+ SDK /opt/android-sdk（腾讯镜像）+ Gradle 8.11.1 /opt/gradle（腾讯镜像）
+  - 已实测：构建成功 + adb 覆盖安装 R5CWC08ZBET + 应用启动 ✅
+  - 详细踩坑：工作区 `2026-08-16-16-09-21\.workbuddy\memory\2026-08-16.md`
+- 云端 CI 保留为兜底：改代码 → `git push`（SSH，免 token）→ Actions（缓存后 3-4 分钟）→ 下载 artifact → adb 安装
 - **git remote 已切 SSH**：`git@github.com:drw1230/music-app.git`（~/.ssh/id_ed25519_github + config 走 ssh.github.com:443，6/4 已配好）
-- 本机 E:\gradle-fresh 保留（依赖完整 2.3G），gradle.properties 已加 `org.gradle.vfs.watch=false`；若本机恢复可继续用（详见 MEMORY v5）
 - 手机 adb 连接正常：`R5CWC08ZBET`
 
 ## 五、关键路径
@@ -61,7 +67,8 @@
 
 ## 六、待办 / 提醒
 
-1. **用户验证**：最新 APK（c4446a0）已装到手机——本地播放/电台/搜索试听回归
+1. **构建方式已切换**：优先 `build.bat`（容器构建 7s），CI 兜底
+2. **用户验证**：最新 APK 已装到手机（容器构建版）——本地播放/电台/搜索试听回归
 2. GitHub token（ghp_0eC5...）已暴露 → **SSH push 已通，token 可撤销**（Settings → Developer settings → tokens → Delete）；如需 API 查询可另建 fine-grained 只读 token
 3. 仓库已 Private ✅
 4. 用户反馈后如有新需求 → 改代码 push（SSH）→ CI 出包（缓存加速后 3-4 分钟）
