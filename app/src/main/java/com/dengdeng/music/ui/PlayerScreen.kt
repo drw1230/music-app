@@ -267,20 +267,19 @@ fun PlayerScreen(
                     .fillMaxWidth()
             ) {
                 Column(Modifier.fillMaxSize()) {
-                    // 封面区（占剩余空间；顶部留白实现"封面下移"，不用 offset——offset 不占布局
-                    // 空间会把封面底压到小歌词上造成重叠；点击进大歌词页）
+                    // 封面区（内容定高：下移留白 + 封面尺寸；封面与小歌词之间留小间距，整体紧凑无大片留白）
                     Column(
                         modifier = Modifier
-                            .weight(1f)
                             .fillMaxWidth()
                             .clickable { showFullLyrics = true }
                     ) {
-                        // 封面下移空间（真实占位，封面与小歌词之间自然留出间距不重叠）
-                        Spacer(Modifier.height(72.dp))
+                        // 封面下移空间（约 1/4 封面高，视觉下移但不产生大片空白）
+                        Spacer(Modifier.height(48.dp))
                         Box(
                             modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
+                                .fillMaxWidth(0.86f)
+                                .aspectRatio(1f)
+                                .align(Alignment.CenterHorizontally),
                             contentAlignment = Alignment.Center
                         ) {
                         Crossfade(
@@ -304,7 +303,7 @@ fun PlayerScreen(
                         ) { _ ->
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth(0.86f),
+                                    .fillMaxWidth(1f),
                                 contentAlignment = Alignment.Center
                             ) {
                                 RotatingAlbumArt(
@@ -328,6 +327,8 @@ fun PlayerScreen(
                             .clickable { showFullLyrics = true }
                     )
                     Spacer(Modifier.height(10.dp))
+                    // 剩余空间推到底部控制区：小歌词位于封面与歌名之间，不留大片空白
+                    Spacer(Modifier.weight(1f))
                 }
             }
 
