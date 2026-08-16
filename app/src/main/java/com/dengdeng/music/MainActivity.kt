@@ -10,15 +10,32 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -71,8 +88,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        checkAndRequestPermission()
-        requestNotificationPermissionIfNeeded()
+        // 仅读取媒体权限状态（不弹框）；弹框延后到主界面显示后，避免启动时多个界面叠加
+        hasPermission = checkMediaPermission()
         setContent {
             // 主题模式：0=跟随系统 1=亮色 2=暗色（DataStore 持久化）
             var themeMode by remember { mutableStateOf(0) }
@@ -81,6 +98,13 @@ class MainActivity : ComponentActivity() {
                 themeDataStore.data.collect { prefs ->
                     themeMode = prefs[intPreferencesKey("theme_mode")] ?: 0
                 }
+            }
+            // 主界面显示后：已授权 → 自动扫描曲库（恢复"打开即有歌"）；未授权 → 弹权限（授权后自动扫描）
+            LaunchedEffect(Unit) {
+                kotlinx.coroutines.delay(500)
+                requestMediaPermissionIfNeeded()
+                kotlinx.coroutines.delay(500)
+                requestNotificationPermissionIfNeeded()
             }
             fun saveThemeMode(mode: Int) {
                 themeMode = mode
@@ -110,6 +134,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 检查媒体读取权限（不弹框），返回是否已授权 */
+    private fun checkMediaPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        return ContextCompat.checkSelfPermission(this, permission) ==
+                PackageManager.PERMISSION_GRANTED
+    }
+
+    /** 已授权则自动扫描曲库；未授权则请求权限（授权后回调自动扫描） */
+    private fun requestMediaPermissionIfNeeded() {
+        if (checkMediaPermission()) {
+            viewModel.scanMusic()
+            return
+        }
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        permissionLauncher.launch(permission)
+    }
+
     /** Android 13+ 请求通知权限 */
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -118,23 +167,6 @@ class MainActivity : ComponentActivity() {
             if (!granted) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-        }
-    }
-
-    /** 检查并申请媒体读取权限 */
-    private fun checkAndRequestPermission() {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_AUDIO
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-        val granted = ContextCompat.checkSelfPermission(this, permission) ==
-                PackageManager.PERMISSION_GRANTED
-        hasPermission = granted
-        if (!granted) {
-            permissionLauncher.launch(permission)
-        } else {
-            viewModel.scanMusic()
         }
     }
 }

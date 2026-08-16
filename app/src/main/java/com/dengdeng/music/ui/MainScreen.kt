@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
@@ -39,6 +40,8 @@ import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
@@ -51,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.media3.common.Player
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -98,6 +102,8 @@ fun MainScreen(
     var onlineSearchQuery by remember { mutableStateOf<String?>(null) }
     // 每日电台开关
     var showRadio by remember { mutableStateOf(false) }
+    // 智能歌单开关（曲库头部入口，覆盖曲库区）
+    var showSmartPlaylist by remember { mutableStateOf(false) }
     // 待添加到歌单的歌曲 ID（非 null 时显示选择弹窗）
     var songForPlaylist by remember { mutableStateOf<Long?>(null) }
     // 右上角更多菜单
@@ -120,18 +126,22 @@ fun MainScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("DDmusic") },
-                actions = {
-                    // 右上角更多菜单
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "更多")
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false }
-                        ) {
+            // 覆盖界面（智能歌单/电台/搜索）隐藏 DDmusic 主顶栏，让覆盖界面用自己的顶栏更沉浸；
+            // 主菜单（睡眠定时/主题/关于/播放历史/排序/刷新扫描）只在曲库首页通过 ⋮ 进入
+            val inOverlay = showRadio || showSmartPlaylist || onlineSearchQuery != null
+            if (!inOverlay) {
+                TopAppBar(
+                    title = { Text("DDmusic") },
+                    actions = {
+                        // 右上角更多菜单
+                        Box {
+                            IconButton(onClick = { menuExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
                             // 刷新扫描
                             DropdownMenuItem(
                                 text = { Text("刷新扫描") },
@@ -195,6 +205,10 @@ fun MainScreen(
                     }
                 }
             )
+            } else {
+                // 覆盖界面保留状态栏占位，让覆盖界面的顶栏从状态栏下方开始
+                Spacer(Modifier.statusBarsPadding())
+            }
         },
         bottomBar = {
             if (viewModel.nowPlayingSong() != null) {
@@ -207,6 +221,16 @@ fun MainScreen(
         }
     ) { padding ->
         when {
+            // 智能歌单界面（覆盖整个曲库区）
+            showSmartPlaylist -> {
+                BackHandler { showSmartPlaylist = false }
+                Box(Modifier.padding(padding)) {
+                    SmartPlaylistScreen(
+                        viewModel = viewModel,
+                        onBack = { showSmartPlaylist = false }
+                    )
+                }
+            }
             // 每日电台界面（覆盖整个曲库区）
             showRadio -> {
                 BackHandler { showRadio = false }
@@ -331,7 +355,8 @@ fun MainScreen(
                                 viewModel.addSearchHistory(q)
                                 onlineSearchQuery = q
                             },
-                            onRadio = { showRadio = true }
+                            onRadio = { showRadio = true },
+                            onSmartPlaylist = { showSmartPlaylist = true }
                         )
                     }
                 }
@@ -497,7 +522,8 @@ private fun SongList(
     onAddToPlaylist: (Long) -> Unit,
     onDeleteSongs: (List<android.net.Uri>) -> Unit,
     onOnlineSearch: (String) -> Unit,
-    onRadio: () -> Unit
+    onRadio: () -> Unit,
+    onSmartPlaylist: () -> Unit
 ) {
     val songs = viewModel.filteredSongs
     val totalDuration = songs.sumOf { it.durationMs }
@@ -707,7 +733,7 @@ private fun SongList(
                 songCount = songs.size,
                 totalMinutes = totalMinutes,
                 onPlayAll = { viewModel.playSong(0) },
-                onShuffleAll = { viewModel.shufflePlay() },
+                onSmartPlaylist = onSmartPlaylist,
                 onRadio = onRadio
             )
         }
@@ -1218,7 +1244,7 @@ private fun LibraryHeader(
     songCount: Int,
     totalMinutes: Long,
     onPlayAll: () -> Unit,
-    onShuffleAll: () -> Unit,
+    onSmartPlaylist: () -> Unit,
     onRadio: () -> Unit
 ) {
     Column(
@@ -1251,14 +1277,14 @@ private fun LibraryHeader(
                 Text("全部播放", style = MaterialTheme.typography.labelLarge)
             }
             OutlinedButton(
-                onClick = onShuffleAll,
+                onClick = onSmartPlaylist,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp),
                 contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
-                Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("随机播放", style = MaterialTheme.typography.labelLarge)
+                Text("智能歌单", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
             OutlinedButton(
                 onClick = onRadio,
@@ -1665,6 +1691,26 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                     )
                 }
 
+                // 播放模式切换（顺序 → 列表循环 → 单曲循环 → 乱序 → 顺序）——放在播放控制组左侧（上一首左边）
+                val mode = viewModel.repeatMode
+                val cycleIcon = when (mode) {
+                    MusicViewModel.REPEAT_MODE_SHUFFLE -> Icons.Default.Shuffle
+                    Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
+                    else -> Icons.Default.Repeat   // 顺序(OFF) / 列表循环(ALL)
+                }
+                val cycleTint = if (mode == Player.REPEAT_MODE_OFF) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.primary
+                }
+                IconButton(onClick = { viewModel.cycleRepeatMode() }) {
+                    Icon(
+                        cycleIcon,
+                        contentDescription = "循环模式",
+                        modifier = Modifier.size(22.dp),
+                        tint = cycleTint
+                    )
+                }
                 if (!isOnline) {
                     IconButton(onClick = { viewModel.previous() }) {
                         Icon(

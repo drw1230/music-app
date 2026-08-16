@@ -28,12 +28,24 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * 每日电台界面：双榜热歌（网易云 + QQ）→ 每日推荐
  * - 播放 <10s 切走的歌自动降权（ViewModel.skipSongs 过滤）
  * - 进入界面自动开始播放；支持刷新电台、单曲试听（曲库迷你条控制）、下载
+ * - 探索版：榜单可轮换（热歌榜/飙升榜/新歌榜/流行指数…），刷新按钮切换下一组榜单
+ * - 熟悉版：本地常听（已听）+ 常听歌手相似新歌（过滤已听、按歌名去重）
  */
+// 探索版候选榜单组合（网易云歌单 id, QQ topid）：点「刷新电台」依次轮换
+private val hotVariants = listOf(
+    3778678L to 4,      // 热歌榜 × 热歌榜
+    19723756L to 52,    // 飙升榜 × 抖音热歌
+    3779629L to 5,      // 新歌榜 × 新歌榜
+    2884035L to 26      // 流行指数 × 欧美金曲
+)
+private val hotVariantNames = listOf("热歌榜", "飙升榜+抖音", "新歌榜", "流行+欧美")
 @Composable
 fun OnlineRadioScreen(
     viewModel: MusicViewModel,
@@ -47,37 +59,43 @@ fun OnlineRadioScreen(
     var error by remember { mutableStateOf(false) }
     // 电台播放状态："准备电台 x/30…" / null
     var radioState by remember { mutableStateOf<String?>(null) }
-    // 单曲下载状态：key=title|artist → 文案
-    var downloadState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    // 是否已自动播放过（进入界面自动播一次）
-    var autoPlayed by remember { mutableStateOf(false) }
-    // 电台模式：false=探索版（平台热榜为主） true=熟悉版（常听歌手热歌为主）
+    // 是否已自动播放过（true=进入默认不自动播放，用户点"播放电台"才播；电台播完自动刷新时置 false 续播）
+    var autoPlayed by remember { mutableStateOf(true) }
+    // 电台模式：false=探索版（平台热榜为主） true=熟悉版（已听 + 相似推荐）
     var familiarMode by remember { mutableStateOf(false) }
+    // 探索版榜单轮换序号（点「刷新电台」递增，切到下一组榜单）
+    var refreshRound by remember { mutableStateOf(0) }
+    // 熟悉版：本地常听歌（已听过，直接入队无需解析 URL）
+    var familiarLocalSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
 
-    /** 播放电台（并行解析 URL → 在线流队列，几十首秒级完成） */
+    /** 播放电台（并行解析 URL + 预检音源可播性 → 过滤坏音源后入队；熟悉版=本地已听 + 平台相似） */
     fun playRadio() {
         if (songs.isEmpty() || radioState != null) return
         scope.launch {
             val targets = songs
-            radioState = "正在准备电台（并行解析音源）…"
-            val queue = coroutineScope {
-                targets.map { s -> async { s to OnlineMetadataFetcher.resolveOnlineUrl(s) } }
-                    .awaitAll()
-                    .mapNotNull { (s, url) ->
-                        url?.let {
-                            Song(
-                                id = -1L,
-                                title = s.title,
-                                artist = s.artist,
-                                album = "每日电台",
-                                durationMs = s.durationMs,
-                                uri = android.net.Uri.parse(it),
-                                albumArtUri = s.artUrl?.let { u -> android.net.Uri.parse(u) }
-                            )
-                        }
-                    }
+            radioState = "正在准备电台（解析并检测音源）…"
+            val localPart = if (familiarMode) familiarLocalSongs else emptyList()
+            val onlinePart = coroutineScope {
+                val gate = Semaphore(8)
+                targets.map { s -> async {
+                    val url = runCatching {
+                        gate.withPermit { OnlineMetadataFetcher.resolveOnlineUrl(s) }
+                    }.getOrNull()
+                    if (url != null) {
+                        Song(
+                            id = -1L,
+                            title = s.title,
+                            artist = s.artist,
+                            album = "每日电台",
+                            durationMs = s.durationMs,
+                            uri = android.net.Uri.parse(url),
+                            albumArtUri = s.artUrl?.let { u -> android.net.Uri.parse(u) }
+                        )
+                    } else null   // 解析不出音源 → 跳过
+                } }.awaitAll().filterNotNull()
             }
             radioState = null
+            val queue = localPart + onlinePart
             if (queue.isNotEmpty()) {
                 viewModel.playOnlineQueue(queue, isRadio = true)
             } else {
@@ -92,15 +110,34 @@ fun OnlineRadioScreen(
             loading = true
             error = false
             val hot = if (familiarMode) {
-                // 熟悉版：按我最常听的歌手取平台热歌
-                OnlineMetadataFetcher.fetchFamiliarSongs(viewModel.topArtists(5))
+                // 熟悉版：本地常听（已听过，直接入队）+ 常听歌手的相似新歌（过滤已听、按歌名去重）
+                val skip0 = viewModel.skipSongs
+                val top = viewModel.topSongs(10).filterNot { "${it.title}|${it.artist}" in skip0 }
+                familiarLocalSongs = top
+                val listened = top.map { "${it.title}|${it.artist}".lowercase() }.toSet()
+                val familiar = OnlineMetadataFetcher.fetchFamiliarSongs(viewModel.topArtists(5), listened)
+                if (force) familiar.shuffled() else familiar   // 刷新：相似歌打乱顺序
             } else {
-                // 探索版：网易云 + QQ 双榜热歌
-                OnlineMetadataFetcher.fetchHotSongs(20)
+                // 探索版：榜单轮换——刷新/切模式时换下一组（首次进入用热歌榜）
+                familiarLocalSongs = emptyList()
+                if (force) refreshRound++
+                val v = hotVariants[refreshRound % hotVariants.size]
+                OnlineMetadataFetcher.fetchHotSongs(20, v.first, v.second)
             }
             val skip = viewModel.skipSongs
-            songs = if (skip.isEmpty()) hot else hot.filterNot {
+            val filtered = if (skip.isEmpty()) hot else hot.filterNot {
                 "${it.title}|${it.artist}" in skip
+            }
+            // 预检音源：并行解析 URL（限流 8 并发），只过滤"解析不出音源"的歌；
+            // 探测可播性不可靠（CDN 超时/Range 不支持会误杀）→ 不做硬过滤，坏歌交给播放时的 5 秒守卫
+            songs = coroutineScope {
+                val gate = Semaphore(8)
+                filtered.map { s -> async {
+                    val url = runCatching {
+                        gate.withPermit { OnlineMetadataFetcher.resolveOnlineUrl(s) }
+                    }.getOrNull()
+                    (url != null) to s
+                } }.awaitAll().filter { it.first }.map { it.second }
             }
             loading = false
             if (songs.isEmpty()) error = true
@@ -154,7 +191,8 @@ fun OnlineRadioScreen(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    if (familiarMode) "熟悉版 · 常听歌手热歌" else "探索版 · 网易云热歌榜 + QQ热歌榜",
+                    if (familiarMode) "熟悉版 · 已听 ${familiarLocalSongs.size} 首 + 相似推荐 ${songs.size} 首"
+                    else "探索版 · ${hotVariantNames[refreshRound % hotVariants.size]}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -175,8 +213,8 @@ fun OnlineRadioScreen(
                         .clickable(enabled = !loading) {
                             if (familiarMode != mode) {
                                 familiarMode = mode
-                                autoPlayed = true   // 阻止旧列表自动播放，改由 loadRadio 加载完直接播新模式
-                                loadRadio(true, autoPlay = true)
+                                autoPlayed = true   // 切模式不自动播放（与进入一致），用户点"播放电台"才播
+                                loadRadio(true)
                             }
                         }
                         .padding(horizontal = 10.dp, vertical = 5.dp)
@@ -256,7 +294,7 @@ fun OnlineRadioScreen(
                 ) {
                     items(songs, key = { "${it.platform}|${it.id}" }) { song ->
                         OnlineSongRow(song = song, onClick = {
-                            // 点击歌曲 → 在线试听（统一用曲库底部迷你条控制，不进全屏播放界面）
+                            // 点击歌曲 → 直接播放最高音质（高品→标准自动降级），走迷你条；下载在播放页显式按钮
                             scope.launch {
                                 val url = OnlineMetadataFetcher.resolveOnlineUrl(song)
                                 if (url != null) {
@@ -264,39 +302,6 @@ fun OnlineRadioScreen(
                                 }
                             }
                         })
-                        // 右侧下载按钮
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 76.dp, end = 16.dp, bottom = 8.dp),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val dKey = "${song.title}|${song.artist}"
-                            val dState = downloadState[dKey]
-                            when {
-                                dState != null -> Text(dState, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                else -> Text(
-                                    "下载",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                                        .clickable {
-                                            scope.launch {
-                                                downloadState = downloadState + (dKey to "下载中…")
-                                                val url = OnlineMetadataFetcher.resolveOnlineUrl(song)
-                                                val ok = if (url != null) {
-                                                    OnlineDownloader.downloadToMusicLibrary(context, url, song.title, song.artist)
-                                                } else false
-                                                downloadState = downloadState + (dKey to if (ok) "已下载 ✓" else "失败")
-                                            }
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                )
-                            }
-                        }
                     }
                 }
             }

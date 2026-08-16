@@ -98,8 +98,15 @@ object OnlineDownloader {
         return arr
     }
 
-    /** 下载音频到系统音乐库（Music/DDmusic/），返回是否成功 */
-    suspend fun downloadToMusicLibrary(context: Context, url: String, title: String, artist: String, format: String = "mp3"): Boolean =
+    /** 下载音频到系统音乐库（Music/DDmusic/），成功后尽力保存歌词(.lrc)与封面图片；返回是否成功 */
+    suspend fun downloadToMusicLibrary(
+        context: Context,
+        url: String,
+        title: String,
+        artist: String,
+        format: String = "mp3",
+        artUrl: String? = null
+    ): Boolean =
         withContext(Dispatchers.IO) {
             if (url.isBlank()) return@withContext false
             try {
@@ -142,6 +149,9 @@ object OnlineDownloader {
                     values.clear()
                     values.put(MediaStore.Audio.Media.IS_PENDING, 0)
                     resolver.update(uri, values, null, null)
+                    // 尽力保存歌词 + 封面（失败不影响下载成功；下次扫描进曲库即有歌词与封面）
+                    runCatching { saveLyricFile(context, title, artist) }
+                    runCatching { artUrl?.let { saveCoverFile(context, title, artist, it) } }
                 } else {
                     resolver.delete(uri, null, null)
                 }
@@ -150,6 +160,66 @@ object OnlineDownloader {
                 false
             }
         }
+
+    /** 保存歌词到 Music/DDmusic/<同名>.lrc（LyricParser 本地命中；联网取歌词失败则跳过） */
+    private suspend fun saveLyricFile(context: Context, title: String, artist: String) {
+        val lyric = OnlineMetadataFetcher.fetchLyricForSong(title, artist) ?: return
+        if (lyric.isBlank()) return
+        val safeTitle = sanitize(title)
+        val safeArtist = sanitize(artist)
+        val displayName = "$safeTitle-$safeArtist.lrc"
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Files.FileColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.Files.FileColumns.MIME_TYPE, "text/plain")
+            put(MediaStore.Files.FileColumns.RELATIVE_PATH, "Music/DDmusic")
+            put(MediaStore.Files.FileColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Files.getContentUri("external"), values) ?: return
+        val ok = try {
+            resolver.openOutputStream(uri)?.use { out ->
+                out.write(lyric.toByteArray(Charsets.UTF_8))
+            } != null
+        } catch (e: Exception) {
+            false
+        }
+        if (ok) {
+            values.clear()
+            values.put(MediaStore.Files.FileColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            resolver.delete(uri, null, null)
+        }
+    }
+
+    /** 保存封面图片到应用私有目录（filesDir/covers/）+ 记录 CoverStore（URL 兜底） */
+    private suspend fun saveCoverFile(context: Context, title: String, artist: String, artUrl: String) {
+        val target = LocalCover.targetFile(context, title, artist)
+        if (target.exists()) {
+            // 已有本地封面，仅补记 CoverStore URL
+            runCatching { CoverStore.save(context, title, artist, artUrl) }
+            return
+        }
+        val ok = try {
+            val conn = (URL(artUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 15000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14)")
+            }
+            if (conn.responseCode != 200) {
+                conn.disconnect()
+                false
+            } else {
+                target.outputStream().use { out -> conn.inputStream.use { it.copyTo(out) } }.let { true }
+            }
+        } catch (e: Exception) {
+            false
+        }
+        if (ok) {
+            runCatching { CoverStore.save(context, title, artist, artUrl) }
+        }
+    }
 
     private fun sanitize(s: String): String =
         s.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40)

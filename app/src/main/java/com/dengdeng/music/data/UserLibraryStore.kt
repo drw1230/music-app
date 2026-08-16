@@ -210,6 +210,163 @@ object UserLibraryStore {
         return obj.toString()
     }
 
+    // ==================== 最后播放时间（智能歌单"最近播放"倒序） ====================
+
+    private val KEY_LAST_PLAYED_MS = stringPreferencesKey("last_played_ms_json")
+
+    /** 最后播放时间（songId → 毫秒时间戳，Flow） */
+    fun lastPlayedMsFlow(context: Context): Flow<Map<Long, Long>> =
+        context.dataStore.data.map { prefs -> parseLongMap(prefs[KEY_LAST_PLAYED_MS] ?: "{}") }
+
+    /** 保存最后播放时间整表 */
+    suspend fun saveLastPlayedMs(context: Context, map: Map<Long, Long>) {
+        context.dataStore.edit { prefs -> prefs[KEY_LAST_PLAYED_MS] = longMapToJson(map) }
+    }
+
+    private fun parseLongMap(raw: String): Map<Long, Long> {
+        return try {
+            val obj = JSONObject(raw)
+            val result = mutableMapOf<Long, Long>()
+            obj.keys().forEach { key ->
+                result[key.toLongOrNull() ?: return@forEach] = obj.optLong(key, 0L)
+            }
+            result
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun longMapToJson(map: Map<Long, Long>): String {
+        val obj = JSONObject()
+        map.forEach { (id, ts) -> obj.put(id.toString(), ts) }
+        return obj.toString()
+    }
+
+    // ==================== 在线播放记录（智能歌单统计） ====================
+
+    /** 在线播放记录（key = "title|artist".lowercase()；存 URL 供智能歌单点击重播） */
+    data class OnlineRecord(
+        val title: String,
+        val artist: String,
+        val url: String,
+        val artUrl: String?,
+        val durationMs: Long,
+        val times: Int,
+        val lastPlayedMs: Long
+    )
+
+    private val KEY_ONLINE_RECORDS = stringPreferencesKey("online_records_json")
+
+    /** 在线播放记录 Flow */
+    fun onlineRecordsFlow(context: Context): Flow<Map<String, OnlineRecord>> =
+        context.dataStore.data.map { prefs -> parseOnlineRecords(prefs[KEY_ONLINE_RECORDS] ?: "{}") }
+
+    /** 保存整表在线记录（ViewModel 内存为唯一增量来源，这里只持久化） */
+    suspend fun saveOnlineRecords(context: Context, map: Map<String, OnlineRecord>) {
+        context.dataStore.edit { prefs -> prefs[KEY_ONLINE_RECORDS] = onlineRecordsToJson(map) }
+    }
+
+    private fun parseOnlineRecords(raw: String): Map<String, OnlineRecord> {
+        return try {
+            val obj = JSONObject(raw)
+            val result = mutableMapOf<String, OnlineRecord>()
+            obj.keys().forEach { key ->
+                val item = obj.optJSONObject(key) ?: return@forEach
+                result[key] = OnlineRecord(
+                    title = item.optString("title"),
+                    artist = item.optString("artist"),
+                    url = item.optString("url"),
+                    artUrl = item.optString("artUrl").takeIf { it.isNotBlank() },
+                    durationMs = item.optLong("durationMs", 0L),
+                    times = item.optInt("times", 1),
+                    lastPlayedMs = item.optLong("lastPlayedMs", 0L)
+                )
+            }
+            result
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun onlineRecordsToJson(map: Map<String, OnlineRecord>): String {
+        val obj = JSONObject()
+        map.forEach { (key, r) ->
+            obj.put(
+                key,
+                JSONObject()
+                    .put("title", r.title)
+                    .put("artist", r.artist)
+                    .put("url", r.url)
+                    .put("artUrl", r.artUrl ?: "")
+                    .put("durationMs", r.durationMs)
+                    .put("times", r.times)
+                    .put("lastPlayedMs", r.lastPlayedMs)
+            )
+        }
+        return obj.toString()
+    }
+
+    // ==================== 曲库缓存（启动秒显，避免每次重扫转圈） ====================
+
+    /** 缓存的歌曲（含 MediaStore id，播放历史/收藏可对齐） */
+    data class CachedSong(
+        val id: Long,
+        val title: String,
+        val artist: String,
+        val album: String,
+        val durationMs: Long,
+        val uri: String,
+        val albumArtUri: String?
+    )
+
+    private val KEY_SONGS_CACHE = stringPreferencesKey("songs_cache_json")
+
+    /** 曲库缓存 Flow（无缓存返回空列表） */
+    fun songsCacheFlow(context: Context): Flow<List<CachedSong>> =
+        context.dataStore.data.map { prefs -> parseSongsCache(prefs[KEY_SONGS_CACHE] ?: "[]") }
+
+    /** 保存曲库缓存（扫描完成后调用） */
+    suspend fun saveSongsCache(context: Context, songs: List<CachedSong>) {
+        context.dataStore.edit { prefs -> prefs[KEY_SONGS_CACHE] = songsCacheToJson(songs) }
+    }
+
+    private fun parseSongsCache(raw: String): List<CachedSong> {
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                CachedSong(
+                    id = o.optLong("id", -1L),
+                    title = o.optString("title", ""),
+                    artist = o.optString("artist", ""),
+                    album = o.optString("album", ""),
+                    durationMs = o.optLong("durationMs", 0L),
+                    uri = o.optString("uri", ""),
+                    albumArtUri = o.optString("albumArtUri", "").takeIf { it.isNotBlank() }
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun songsCacheToJson(songs: List<CachedSong>): String {
+        val arr = JSONArray()
+        songs.forEach { s ->
+            arr.put(
+                JSONObject()
+                    .put("id", s.id)
+                    .put("title", s.title)
+                    .put("artist", s.artist)
+                    .put("album", s.album)
+                    .put("durationMs", s.durationMs)
+                    .put("uri", s.uri)
+                    .put("albumArtUri", s.albumArtUri ?: "")
+            )
+        }
+        return arr.toString()
+    }
+
     // ==================== 上次播放 + 播放模式记忆 ====================
 
     /** 上次播放信息（歌曲 ID + 进度 + 播放状态），无记录返回 null */

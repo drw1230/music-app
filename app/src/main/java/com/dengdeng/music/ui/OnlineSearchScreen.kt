@@ -234,7 +234,7 @@ internal fun OnlineSourceSheet(
                 return@launch
             }
             val ok = OnlineDownloader.downloadToMusicLibrary(
-                context, url, song.title, song.artist, source.format
+                context, url, song.title, song.artist, source.format, song.artUrl
             )
             downloadState[key] = if (ok) "已下载 ✓" else "下载失败"
             if (ok) onDownloaded()

@@ -232,6 +232,12 @@ object OnlineMetadataFetcher {
         return@withContext best
     }
 
+    /** 按歌名+歌手联网取歌词（供下载保存 .lrc；先搜歌拿 id 再取歌词） */
+    suspend fun fetchLyricForSong(title: String, artist: String): String? = withContext(Dispatchers.IO) {
+        val match = searchSong(title, artist) ?: return@withContext null
+        fetchLyric(match.songId)
+    }
+
     /** 按 songId 获取 LRC 歌词文本 */
     suspend fun fetchLyric(songId: Long): String? = withContext(Dispatchers.IO) {
         if (songId <= 0L) return@withContext null
@@ -670,15 +676,21 @@ object OnlineMetadataFetcher {
     // ==================== 热歌榜 / 电台 ====================
 
     /**
-     * 获取热门歌曲（网易云热歌榜 + QQ 热歌榜 双榜合并）
+     * 获取热门歌曲（网易云歌单 + QQ 榜单 双源合并）
      * @param limit 每榜取多少首（合并去重后约 2×limit）
+     * @param neteaseId 网易云歌单 id（默认 3778678 热歌榜；可传飙升榜 19723756 / 新歌榜 3779629 / 流行指数 2884035 等）
+     * @param qqTopId QQ 榜单 topid（默认 4 热歌榜；可传 52 抖音热歌 / 5 新歌榜 / 26 欧美金曲 等）
      */
-    suspend fun fetchHotSongs(limit: Int = 20): List<OnlineSong> = withContext(Dispatchers.IO) {
+    suspend fun fetchHotSongs(
+        limit: Int = 20,
+        neteaseId: Long = 3778678L,
+        qqTopId: Int = 4
+    ): List<OnlineSong> = withContext(Dispatchers.IO) {
         val results = mutableListOf<OnlineSong>()
 
-        // —— 网易云热歌榜（歌单 3778678）——
+        // —— 网易云热歌榜（歌单 id 参数化）——
         try {
-            val url = URL("https://music.163.com/api/playlist/detail?id=3778678&updateTime=-1")
+            val url = URL("https://music.163.com/api/playlist/detail?id=$neteaseId&updateTime=-1")
             val json = httpGet(url)
             val tracks = json?.optJSONObject("result")?.optJSONArray("tracks")
             if (tracks != null) {
@@ -712,9 +724,9 @@ object OnlineMetadataFetcher {
             }
         } catch (e: Exception) { }
 
-        // —— QQ 热歌榜（topid=4）——
+        // —— QQ 热歌榜（topid 参数化）——
         try {
-            val url = URL("https://c.y.qq.com/v8/fcg-bin/fcg_v8_toplist_cp.fcg?topid=4&format=json&page=detail&type=top&tpl=3")
+            val url = URL("https://c.y.qq.com/v8/fcg-bin/fcg_v8_toplist_cp.fcg?topid=$qqTopId&format=json&page=detail&type=top&tpl=3")
             val json = httpGetWithHeaders(url)
             val songlist = json?.optJSONArray("songlist")
             if (songlist != null) {
@@ -754,10 +766,16 @@ object OnlineMetadataFetcher {
     }
 
     /**
-     * 按歌手取平台热门歌（电台「熟悉版」数据源）
-     * 输入我最常听的歌手列表，并行搜索每个歌手的热门歌曲（网易云+QQ 双源），合并去重后截断
+     * 按歌手取平台热门歌（电台「熟悉版」平台部分）
+     * 输入我最常听的歌手列表，并行搜索每个歌手的热门歌曲（网易云+QQ 双源）
+     * 过滤已听过的歌（listenedKeys），并按歌名去重（同名/翻唱只保留第一首，避免刷屏）
      */
-    suspend fun fetchFamiliarSongs(artists: List<String>, perArtist: Int = 6, limit: Int = 40): List<OnlineSong> =
+    suspend fun fetchFamiliarSongs(
+        artists: List<String>,
+        listenedKeys: Set<String>,
+        perArtist: Int = 8,
+        limit: Int = 30
+    ): List<OnlineSong> =
         withContext(Dispatchers.IO) {
             if (artists.isEmpty()) return@withContext emptyList()
             val results = coroutineScope {
@@ -767,13 +785,98 @@ object OnlineMetadataFetcher {
                     }
                 }.awaitAll().flatten()
             }
-            val dedup = LinkedHashMap<String, OnlineSong>()
+            val seenTitle = HashSet<String>()
+            val out = ArrayList<OnlineSong>()
             for (s in results) {
-                val k = "${s.title}|${s.artist}".lowercase()
-                if (!dedup.containsKey(k)) dedup[k] = s
+                val key = "${s.title}|${s.artist}".lowercase()
+                if (key in listenedKeys) continue          // 已听过的歌不再推荐
+                if (!seenTitle.add(s.title.lowercase())) continue  // 同名只留一首
+                out.add(s)
+                if (out.size >= limit) break
             }
-            dedup.values.toList().take(limit)
+            out
         }
+
+    /**
+     * 平台冷门歌曲（智能歌单「冷门探索」数据源）
+     * 搜索网易云"冷门/小众"主题歌单 → 拉取歌单歌曲，合并去重
+     */
+    suspend fun fetchColdSongs(limit: Int = 50): List<OnlineSong> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<OnlineSong>()
+        val keywords = listOf("冷门宝藏歌曲", "小众好听歌曲", "冷门神曲")
+        for (kw in keywords) {
+            if (results.size >= limit) break
+            val playlistIds = try {
+                val url = URL("https://music.163.com/api/search/get?s=${URLEncoder.encode(kw, "UTF-8")}&type=1000&limit=2")
+                val json = httpGet(url)
+                val playlists = json?.optJSONObject("result")?.optJSONArray("playlists")
+                (0 until (playlists?.length() ?: 0)).mapNotNull { i ->
+                    playlists?.optJSONObject(i)?.optLong("id", 0L)?.takeIf { it > 0 }
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            for (pid in playlistIds) {
+                try {
+                    val url = URL("https://music.163.com/api/playlist/detail?id=$pid&updateTime=-1")
+                    val json = httpGet(url)
+                    val tracks = json?.optJSONObject("result")?.optJSONArray("tracks")
+                    if (tracks != null) {
+                        for (i in 0 until tracks.length()) {
+                            if (results.size >= limit) break
+                            val s = tracks.optJSONObject(i) ?: continue
+                            val id = s.optLong("id", 0L)
+                            if (id <= 0L) continue
+                            val artistsArr = s.optJSONArray("artists")
+                            val artist = artistsArr
+                                ?.takeIf { it.length() > 0 }
+                                ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+                            results.add(
+                                OnlineSong(
+                                    platform = "网易云",
+                                    id = id.toString(),
+                                    title = s.optString("name", ""),
+                                    artist = artist,
+                                    album = s.optJSONObject("album")?.optString("name", "") ?: "",
+                                    artUrl = s.optJSONObject("album")?.optString("picUrl", null)?.takeIf { it.isNotBlank() },
+                                    durationMs = s.optLong("duration", 0L)
+                                )
+                            )
+                        }
+                    }
+                } catch (e: Exception) { }
+            }
+        }
+        val dedup = LinkedHashMap<String, OnlineSong>()
+        for (s in results) {
+            val k = "${s.title}|${s.artist}".lowercase()
+            if (!dedup.containsKey(k)) dedup[k] = s
+        }
+        dedup.values.toList().take(limit)
+    }
+
+    /**
+     * 预检音源 URL 是否可播放（GET + Range: bytes=0-0，短超时）
+     * 200/206 = 可用；用于电台/歌单入队前过滤坏音源，避免播放时缓冲卡死
+     */
+    fun isUrlPlayable(url: String): Boolean {
+        return try {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("Range", "bytes=0-0")
+            conn.setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36"
+            )
+            conn.connectTimeout = 4000
+            conn.readTimeout = 4000
+            val code = conn.responseCode
+            conn.disconnect()
+            code == 200 || code == 206
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     /**
      * 解析单曲的可用播放 URL（按平台单请求，供电台/试听快速取流）

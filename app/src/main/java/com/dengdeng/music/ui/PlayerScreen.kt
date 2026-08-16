@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -254,6 +255,24 @@ fun PlayerScreen(
                     Icon(
                         imageVector = Icons.Default.QueueMusic,
                         contentDescription = "播放队列",
+                        tint = Color.White
+                    )
+                }
+                // 下载歌曲（显式按钮）：按歌曲信息搜索 3 平台音源 → 弹窗选择下载
+                IconButton(onClick = {
+                    downloadSong = OnlineMetadataFetcher.OnlineSong(
+                        platform = if (viewModel.isOnlinePlaying) "在线播放" else "",
+                        id = "-1",
+                        title = song.title,
+                        artist = song.artist,
+                        album = song.album,
+                        artUrl = song.albumArtUri?.toString(),
+                        durationMs = song.durationMs
+                    )
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "下载歌曲",
                         tint = Color.White
                     )
                 }

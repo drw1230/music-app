@@ -21,7 +21,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 混淆 + 资源裁剪：release 包更小、冷启动更快（debug 不受影响）
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         // debug 使用仓库内置 keystore（本机与 CI 签名一致，可覆盖安装不丢数据）

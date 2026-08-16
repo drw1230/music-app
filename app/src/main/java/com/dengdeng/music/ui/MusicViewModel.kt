@@ -276,28 +276,119 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     var playHistory by mutableStateOf<Map<Long, Int>>(emptyMap())
         private set
 
+    /** 最后播放时间（songId → 毫秒，智能歌单"最近播放"按此倒序） */
+    var lastPlayedMs by mutableStateOf<Map<Long, Long>>(emptyMap())
+        private set
+
+    /** 在线播放记录（key="title|artist".lowercase() → 记录，供智能歌单统计与点击重播） */
+    var onlineRecords by mutableStateOf<Map<String, UserLibraryStore.OnlineRecord>>(emptyMap())
+        private set
+
+    /** 已听过的歌集合（本地曲库全部 + 在线播放记录），供在线推荐（电台相似/冷门探索）排除"本地/听过"的歌 */
+    fun listenedSongKeys(): Set<String> {
+        val keys = HashSet<String>()
+        songs.forEach { keys.add("${it.title}|${it.artist}".lowercase()) }
+        keys.addAll(onlineRecords.keys)
+        return keys
+    }
+
+    /** 在线播放加载超时守卫：一首歌 5 秒内未进入可播状态（缓冲/错误）→ 自动切下一首（排除用户主动暂停） */
+    private var stallGuardJob: Job? = null
+
+    private fun armStallGuard() {
+        stallGuardJob?.cancel()
+        stallGuardJob = viewModelScope.launch {
+            delay(5000)
+            val ctrl = controller ?: return@launch
+            val state = ctrl.playbackState
+            val ready = state == Player.STATE_READY
+            if (!ctrl.isPlaying && !ready) {
+                // 5 秒仍在缓冲/空闲/错误且非用户暂停 → 跳过
+                runCatching { ctrl.seekToNextMediaItem() }
+                runCatching { ctrl.play() }
+            }
+        }
+    }
+
     /** 记录一次播放（切换歌曲时调用；持久化到 DataStore，重启后保留） */
     fun recordPlay(songId: Long) {
         if (songId <= 0) return
         playHistory = playHistory + (songId to (playHistory[songId] ?: 0) + 1)
+        lastPlayedMs = lastPlayedMs + (songId to System.currentTimeMillis())
         val ctx = getApplication<Application>()
         viewModelScope.launch {
-            runCatching { UserLibraryStore.addPlayRecord(ctx, songId) }
+            runCatching {
+                UserLibraryStore.addPlayRecord(ctx, songId)
+                UserLibraryStore.saveLastPlayedMs(ctx, lastPlayedMs)
+            }
         }
     }
 
-    /** 最近播放的歌曲列表（按历史顺序倒序） */
-    val recentSongs: List<Song>
-        get() = playHistory.keys.reversed()
-            .mapNotNull { id -> songs.firstOrNull { it.id == id } }
+    /** 记录一次在线播放（智能歌单统计；内存即时 + 整表持久化） */
+    fun recordOnlinePlay(song: Song) {
+        if (song.id > 0 || song.uri.scheme == "content") return   // 仅在线歌
+        val key = "${song.title}|${song.artist}".lowercase()
+        val old = onlineRecords[key]
+        val record = UserLibraryStore.OnlineRecord(
+            title = song.title,
+            artist = song.artist,
+            url = song.uri.toString(),
+            artUrl = song.albumArtUri?.toString(),
+            durationMs = song.durationMs,
+            times = (old?.times ?: 0) + 1,
+            lastPlayedMs = System.currentTimeMillis()
+        )
+        onlineRecords = onlineRecords + (key to record)
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            runCatching { UserLibraryStore.saveOnlineRecords(ctx, onlineRecords) }
+        }
+    }
 
-    /** 播放次数排行（按次数倒序） */
-    val topPlayedSongs: List<Pair<Song, Int>>
-        get() = playHistory.entries
-            .sortedByDescending { it.value }
-            .mapNotNull { entry ->
-                songs.firstOrNull { it.id == entry.key }?.let { it to entry.value }
+    /** 最近播放的歌曲列表（本地+在线，统一按最后播放时间倒序；缺时间戳的本地歌排最后） */
+    val recentSongs: List<Song>
+        get() {
+            val local = playHistory.keys
+                .sortedByDescending { lastPlayedMs[it] ?: 0L }
+                .mapNotNull { id -> songs.firstOrNull { it.id == id } }
+            val online = onlineRecords.values
+                .sortedByDescending { it.lastPlayedMs }
+                .map { it.toSong() }
+            val merged = mutableListOf<Pair<Song, Long>>()
+            local.forEach { s -> merged.add(s to (lastPlayedMs[s.id] ?: 0L)) }
+            online.forEach { s ->
+                merged.add(
+                    s to (onlineRecords["${s.title}|${s.artist}".lowercase()]?.lastPlayedMs ?: 0L)
+                )
             }
+            return merged.sortedByDescending { it.second }.map { it.first }
+        }
+
+    /** 播放次数排行（本地 + 在线合并，按次数倒序） */
+    val topPlayedSongs: List<Pair<Song, Int>>
+        get() {
+            val local = playHistory.entries
+                .sortedByDescending { it.value }
+                .mapNotNull { entry ->
+                    songs.firstOrNull { it.id == entry.key }?.let { it to entry.value }
+                }
+            val online = onlineRecords.values
+                .sortedByDescending { it.times }
+                .map { it.toSong() to it.times }
+            return (local + online).sortedByDescending { it.second }
+        }
+
+    /** 在线记录 → 可展示的 Song（uri 即播放 URL，点击可直接播放） */
+    private fun UserLibraryStore.OnlineRecord.toSong(): Song =
+        Song(
+            id = -1L,
+            title = title,
+            artist = artist,
+            album = "在线试听",
+            durationMs = durationMs,
+            uri = android.net.Uri.parse(url),
+            albumArtUri = artUrl?.let { android.net.Uri.parse(it) }
+        )
 
     /** 最常听的歌手（按累计播放次数倒序，供电台「熟悉版」取歌手热歌） */
     fun topArtists(limit: Int = 5): List<String> {
@@ -309,6 +400,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         return counts.entries.sortedByDescending { it.value }.take(limit).map { it.key }
     }
+
+    /** 常听的本地歌曲（按播放次数倒序，供电台「熟悉版」作为"已听过的歌"直接入队） */
+    fun topSongs(limit: Int = 10): List<Song> =
+        playHistory.entries
+            .sortedByDescending { it.value }
+            .mapNotNull { entry -> songs.firstOrNull { it.id == entry.key } }
+            .take(limit)
 
     // ==================== 睡眠定时器 ====================
 
@@ -402,9 +500,19 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 sortMode = UserLibraryStore.getSortMode(context)
                 playHistory = UserLibraryStore.playHistoryFlow(context).first()
+                lastPlayedMs = UserLibraryStore.lastPlayedMsFlow(context).first()
+                onlineRecords = UserLibraryStore.onlineRecordsFlow(context).first()
                 searchHistory = UserLibraryStore.searchHistoryFlow(context).first()
                 lyricOffsets = UserLibraryStore.lyricOffsetsFlow(context).first()
                 skipSongs = UserLibraryStore.skipListFlow(context).first()
+                // 曲库缓存：启动立即显示上次的歌（避免每次重扫转圈）；后台 scanMusic 静默刷新
+                if (songs.isEmpty()) {
+                    val cached = UserLibraryStore.songsCacheFlow(context).first()
+                    if (cached.isNotEmpty()) {
+                        songs = cached.map { it.toSong() }
+                        isLoading = false
+                    }
+                }
             }
         }
     }
@@ -570,10 +678,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
             currentIndex = controller?.currentMediaItemIndex ?: -1
             syncDuration()
-            // 记录播放历史（切歌/开始播放时）
-            mediaItem?.mediaId?.toLongOrNull()?.let { recordPlay(it) }
+            // 记录播放历史（切歌/开始播放时）：本地歌记次数；在线歌记在线记录（智能歌单统计）
+            val id = mediaItem?.mediaId?.toLongOrNull() ?: -1L
+            if (id > 0) {
+                recordPlay(id)
+            } else {
+                onlineQueue.getOrNull(currentIndex)?.let { recordOnlinePlay(it) }
+            }
             // 保存上次播放（歌曲 + 初始位置）
-            saveLastPlayState(mediaItem?.mediaId?.toLongOrNull() ?: -1L)
+            saveLastPlayState(id)
+            // 武装加载超时守卫：5 秒未开始播放自动切下一首
+            armStallGuard()
         }
 
         override fun onRepeatModeChanged(repeatMode: Int) {
@@ -812,23 +927,56 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 扫描本地音乐（扫描后自动做元数据匹配：整理歌手名 + 无歌手联网补全） */
     fun scanMusic() {
         val context = getApplication<Application>()
-        isLoading = true
+        // 已有缓存/旧数据 → 静默刷新（不显示转圈，避免"每次打开重新加载"的割裂感）
+        if (songs.isEmpty()) isLoading = true
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 MusicRepository.scanSongs(context)
             }
             songs = result
             isLoading = false
+            // 持久化曲库缓存（下次启动秒显）
+            runCatching {
+                UserLibraryStore.saveSongsCache(context, result.map { it.toCachedSong() })
+            }
             // 恢复上次播放（songs 已就绪，controller 若已连上则立即恢复）
             tryRestoreLastPlay()
             // 后台增强元数据（不阻塞显示；已匹配的持久化跳过，不会重复处理）
             MetadataEnhancer.clearCache()
             viewModelScope.launch {
                 val enhanced = MetadataEnhancer.enhanceAll(context, result)
-                if (enhanced != result) songs = enhanced
+                if (enhanced != result) {
+                    songs = enhanced
+                    runCatching {
+                        UserLibraryStore.saveSongsCache(context, enhanced.map { it.toCachedSong() })
+                    }
+                }
             }
         }
     }
+
+    /** Song → 缓存条目 */
+    private fun Song.toCachedSong() = UserLibraryStore.CachedSong(
+        id = id,
+        title = title,
+        artist = artist,
+        album = album,
+        durationMs = durationMs,
+        uri = uri.toString(),
+        albumArtUri = albumArtUri?.toString()
+    )
+
+    /** 缓存条目 → Song（本地 uri 直接可播） */
+    private fun UserLibraryStore.CachedSong.toSong(): Song =
+        Song(
+            id = id,
+            title = title,
+            artist = artist,
+            album = album,
+            durationMs = durationMs,
+            uri = android.net.Uri.parse(uri),
+            albumArtUri = albumArtUri?.let { android.net.Uri.parse(it) }
+        )
 
     /** 点击播放某首歌（用当前显示的列表作为播放队列） */
     fun playSong(index: Int) {
