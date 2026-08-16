@@ -7,6 +7,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
@@ -267,37 +270,10 @@ fun MainScreen(
             else -> {
                 // Tab 栏 + 内容
                 Column(Modifier.padding(padding)) {
-                    // 歌单/专辑详情页显示返回 + 名称；否则显示 Tab
-                    val isDetail = (selectedTab == 2 && viewingAlbum != null) ||
-                            (selectedTab == 3 && viewingPlaylist != null)
+                    // 歌单详情页显示返回 + 名称；否则显示 Tab
+                    val isDetail = selectedTab == 3 && viewingPlaylist != null
                     if (isDetail) {
-                        if (selectedTab == 2 && viewingAlbum != null) {
-                            // 专辑详情头（返回 + 专辑名）
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                IconButton(onClick = { viewingAlbum = null }) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                                }
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        text = viewingAlbum!!.name,
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${viewingAlbum!!.songs.size} 首歌曲",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        } else if (selectedTab == 3 && viewingPlaylist != null) {
+                        if (selectedTab == 3 && viewingPlaylist != null) {
                             PlaylistDetailHeader(
                                 playlist = viewingPlaylist!!,
                                 songCount = viewModel.songsOfPlaylist(viewingPlaylist!!.id).size,
@@ -321,19 +297,11 @@ fun MainScreen(
                             onAddToPlaylist = { songForPlaylist = it },
                             onDeleteSongs = onDeleteSongs
                         )
-                        2 -> if (viewingAlbum != null) {
-                            AlbumDetail(
-                                viewModel = viewModel,
-                                album = viewingAlbum!!,
-                                onAddToPlaylist = { songForPlaylist = it },
-                                onDeleteSongs = onDeleteSongs
-                            )
-                        } else {
-                            AlbumList(
-                                viewModel = viewModel,
-                                onOpen = { viewingAlbum = it }
-                            )
-                        }
+                        2 -> RecentList(
+                            viewModel = viewModel,
+                            onAddToPlaylist = { songForPlaylist = it },
+                            onDeleteSongs = onDeleteSongs
+                        )
                         3 -> if (viewingPlaylist != null) {
                             PlaylistDetail(
                                 viewModel = viewModel,
@@ -452,7 +420,7 @@ private fun LibraryTabs(selected: Int, onSelect: (Int) -> Unit) {
             .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        listOf("全部", "喜欢", "专辑", "歌单").forEachIndexed { index, label ->
+        listOf("全部", "喜欢", "最近", "歌单").forEachIndexed { index, label ->
             val isSelected = selected == index
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -766,6 +734,58 @@ private fun SongList(
 }
 
 /** 喜欢歌曲列表 */
+@Composable
+private fun RecentList(
+    viewModel: MusicViewModel,
+    onAddToPlaylist: (Long) -> Unit,
+    onDeleteSongs: (List<android.net.Uri>) -> Unit
+) {
+    val recent = viewModel.recentSongs
+    if (recent.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.History,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("还没有播放记录", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("播放过的歌（本地 + 在线）会显示在这里", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+            }
+        }
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.History, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("最近播放（${recent.size}）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        }
+        // 在线歌 id 均为负，用 歌名+歌手 匹配当前播放
+        val now = viewModel.nowPlayingSong()
+        itemsIndexed(recent) { index, song ->
+            SongRow(
+                viewModel = viewModel,
+                song = song,
+                index = index,
+                isCurrent = now != null && now.title == song.title && now.artist == song.artist,
+                isPlaying = viewModel.isPlaying && now != null && now.title == song.title && now.artist == song.artist,
+                isFavorite = viewModel.isFavorite(song.id),
+                onClick = { viewModel.playSongs(recent, index) },
+                onAddToPlaylist = { onAddToPlaylist(song.id) },
+                onDeleteFromDisk = { onDeleteSongs(listOf(song.uri)) }
+            )
+        }
+    }
+}
+
 @Composable
 private fun FavoriteList(
     viewModel: MusicViewModel,
@@ -1711,14 +1731,13 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                         tint = cycleTint
                     )
                 }
-                if (!isOnline) {
-                    IconButton(onClick = { viewModel.previous() }) {
-                        Icon(
-                            Icons.Default.SkipPrevious,
-                            contentDescription = "上一首",
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                // 在线歌（电台/冷门探索列表队列）也显示上一首/下一首
+                IconButton(onClick = { viewModel.previous() }) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        contentDescription = "上一首",
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
                 IconButton(onClick = { viewModel.togglePlayPause() }) {
                     Icon(
@@ -1727,14 +1746,12 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                         modifier = Modifier.size(28.dp)
                     )
                 }
-                if (!isOnline) {
-                    IconButton(onClick = { viewModel.next() }) {
-                        Icon(
-                            Icons.Default.SkipNext,
-                            contentDescription = "下一首",
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                IconButton(onClick = { viewModel.next() }) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        contentDescription = "下一首",
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
         }
@@ -1749,7 +1766,7 @@ private fun PermissionHint(modifier: Modifier = Modifier) {
     }
 }
 
-/** 加载中 */
+/** 加载中（普通转圈，不用品牌页样式） */
 @Composable
 private fun LoadingView(modifier: Modifier = Modifier) {
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1974,31 +1991,63 @@ private fun HistorySheet(
     }
 }
 
-/** 关于弹窗 */
+/** 关于弹窗（v1.0.0 正式版：完整功能说明，内容可滑动） */
 @Composable
 private fun AboutDialog(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("关于 DDmusic") },
         text = {
-            Column {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text("DDmusic", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(4.dp))
                 Text(
-                    "版本 0.3.2",
+                    "版本 1.0.0（正式版）",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "本地音乐播放器\n• 智能扫描本地音乐\n• 我的歌单 / 喜欢\n• 睡眠定时 / 播放排行\n• 深色主题",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Spacer(Modifier.height(4.dp))
+                FeatureSection("🎵 本地音乐") {
+                    "智能扫描手机音乐；封面 / 歌词自动获取；播放排行、收藏、歌单管理"
+                }
+                FeatureSection("▶️ 播放体验") {
+                    "Fly 风格播放页：大封面、歌词页（拖动控制进度）、均衡器、播放模式切换（顺序 / 循环 / 乱序）、迷你播放条集成循环按钮"
+                }
+                FeatureSection("🌐 在线音乐") {
+                    "网易云 / QQ / 酷狗 3 源搜索试听；多音质下载（标准 / 高品 / 无损）；下载自动保存封面与歌词"
+                }
+                FeatureSection("📻 每日电台") {
+                    "探索版（榜单 + 随机歌单混合）、熟悉版（相似曲目推荐）；音源检测只推荐能播的歌；每日更新大半新歌"
+                }
+                FeatureSection("✨ 智能歌单") {
+                    "最常听（本地 + 在线合并统计）、冷门探索（平台冷门歌，非本地没听过，一键刷新换一批）"
+                }
+                FeatureSection("🧠 记忆持久化") {
+                    "收藏 / 歌单 / 播放历史 / 搜索历史 / 循环模式 / 上次播放位置 / 主题模式 / 歌词偏移 全部跨重启保留"
+                }
+                FeatureSection("⚙️ 其他") {
+                    "深色主题、睡眠定时、自定义封面、标签编辑、歌词微调、启动曲库秒显（缓存）"
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("好的") }
         }
     )
+}
+
+/** 关于弹窗功能区块 */
+@Composable
+private fun FeatureSection(title: String, content: () -> String) {
+    Column {
+        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            content(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }

@@ -1,5 +1,6 @@
 package com.dengdeng.music.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -29,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -93,6 +95,9 @@ fun PlayerScreen(
         return
     }
 
+    // 点击封面 → 大歌词页
+    var showFullLyrics by remember { mutableStateOf(false) }
+
     var showQueue by remember { mutableStateOf(false) }
     val playerContext = LocalContext.current
     // 歌曲菜单 + 封面选择
@@ -108,8 +113,11 @@ fun PlayerScreen(
     var downloadSong by remember { mutableStateOf<OnlineMetadataFetcher.OnlineSong?>(null) }
     // 封面/歌词切换状态
     var showLyrics by remember { mutableStateOf(false) }
-    // 收藏状态从 ViewModel 读取（持久化），切歌时刷新
-    val isFavorite = viewModel.isFavorite(song.id)
+    // 收藏状态从 ViewModel 读取（持久化），切歌时刷新；在线歌用 title|artist 负 key
+    val favId = if (viewModel.isOnlinePlaying) {
+        viewModel.onlineFavoriteKey(song.title, song.artist)
+    } else song.id
+    val isFavorite = viewModel.isFavorite(favId)
 
     val albumArt = song.albumArtUri ?: song.uri
 
@@ -131,7 +139,9 @@ fun PlayerScreen(
                 alpha = 1f - (abs(dragX.value) + abs(dragY.value)) / (dismissThreshold * 3f)
             }
             // 手势：水平拖动（左/右滑）或垂直下滑
-            .pointerInput(dismissThreshold) {
+            .pointerInput(dismissThreshold, showFullLyrics) {
+                // 大歌词页显示时禁用手势（防止穿透导致返回/切歌）
+                if (showFullLyrics) return@pointerInput
                 detectHorizontalDragGestures(
                     onHorizontalDrag = { change, dragAmount ->
                         change.consume()
@@ -160,7 +170,9 @@ fun PlayerScreen(
                     }
                 )
             }
-            .pointerInput(dismissThreshold) {
+            .pointerInput(dismissThreshold, showFullLyrics) {
+                // 大歌词页显示时禁用手势
+                if (showFullLyrics) return@pointerInput
                 detectVerticalDragGestures(
                     onVerticalDrag = { change, dragAmount ->
                         change.consume()
@@ -230,7 +242,7 @@ fun PlayerScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 顶部栏：下拉关闭 + 标题 + 队列
+            // 顶部栏：仅收起按钮（队列/下载/菜单已移到 Fly 控制栏）
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -244,122 +256,19 @@ fun PlayerScreen(
                         tint = Color.White
                     )
                 }
-                Text(
-                    text = "正在播放",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.weight(1f),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                IconButton(onClick = { showQueue = true }) {
-                    Icon(
-                        imageVector = Icons.Default.QueueMusic,
-                        contentDescription = "播放队列",
-                        tint = Color.White
-                    )
-                }
-                // 下载歌曲（显式按钮）：按歌曲信息搜索 3 平台音源 → 弹窗选择下载
-                IconButton(onClick = {
-                    downloadSong = OnlineMetadataFetcher.OnlineSong(
-                        platform = if (viewModel.isOnlinePlaying) "在线播放" else "",
-                        id = "-1",
-                        title = song.title,
-                        artist = song.artist,
-                        album = song.album,
-                        artUrl = song.albumArtUri?.toString(),
-                        durationMs = song.durationMs
-                    )
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = "下载歌曲",
-                        tint = Color.White
-                    )
-                }
-                // 歌曲菜单（刷新封面等）
-                Box {
-                    IconButton(onClick = { showSongMenu = true }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "歌曲菜单",
-                            tint = Color.White
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showSongMenu,
-                        onDismissRequest = { showSongMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("刷新封面") },
-                            onClick = {
-                                showSongMenu = false
-                                showCoverPicker = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("刷新歌词/歌手") },
-                            onClick = {
-                                showSongMenu = false
-                                // 清除歌词缓存强制重新联网获取
-                                LyricParser.clearLyricCache(
-                                    playerContext, song.title, song.artist
-                                )
-                                lyricRefreshToken++
-                                // 歌手未知时触发一次联网匹配补全
-                                if (song.artist.isBlank() || song.artist == "未知艺术家") {
-                                    viewModel.enhanceSongMetadata(song)
-                                }
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("歌词微调") },
-                            onClick = {
-                                showSongMenu = false
-                                showLyricAdjust = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("编辑标签") },
-                            onClick = {
-                                showSongMenu = false
-                                showEditTag = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("均衡器") },
-                            onClick = {
-                                showSongMenu = false
-                                showEqualizer = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("下载歌曲") },
-                            onClick = {
-                                showSongMenu = false
-                                // 构造可下载的在线歌曲（在线歌：直接携带当前音频 URL；本地歌：按歌名查 3 平台）
-                                downloadSong = OnlineMetadataFetcher.OnlineSong(
-                                    platform = if (viewModel.isOnlinePlaying) "在线播放" else "",
-                                    id = "-1",
-                                    title = song.title,
-                                    artist = song.artist,
-                                    album = song.album,
-                                    artUrl = song.albumArtUri?.toString(),
-                                    durationMs = song.durationMs
-                                )
-                            }
-                        )
-                    }
-                }
+                Spacer(Modifier.weight(1f))
             }
 
-            Spacer(Modifier.weight(1f))
-
-            // 封面 / 歌词切换（点击封面切换显示）
+            // ==================== Fly 风格中段 ====================
+            // 大封面（点击进入大歌词页；容器与封面一起下移，整个封面区域可点击）
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .clickable { showLyrics = !showLyrics }
+                    .offset(y = 96.dp)
+                    .clickable { showFullLyrics = true }
+                    .padding(top = 8.dp, bottom = 12.dp),
+                contentAlignment = Alignment.Center
             ) {
                 Crossfade(
                     targetState = showLyrics,
@@ -374,17 +283,24 @@ fun PlayerScreen(
                             refreshToken = lyricRefreshToken
                         )
                     } else {
-                        // 旋转封面（带光晕，切歌淡入淡出）
+                        // Fly 风格大封面（圆角矩形）
                         Crossfade(
                             targetState = song.id,
                             animationSpec = tween(durationMillis = 400),
                             label = "album-crossfade"
                         ) { _ ->
-                            RotatingAlbumArt(
-                                song = song,
-                                isPlaying = viewModel.isPlaying,
-                                coverRefreshToken = coverRefreshToken
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                RotatingAlbumArt(
+                                    song = song,
+                                    isPlaying = viewModel.isPlaying,
+                                    coverRefreshToken = coverRefreshToken
+                                )
+                            }
                         }
                     }
                 }
@@ -415,28 +331,173 @@ fun PlayerScreen(
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                if (!viewModel.isOnlinePlaying) {
-                    IconButton(onClick = { viewModel.toggleFavorite(song.id) }) {
-                        Icon(
-                            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            contentDescription = if (isFavorite) "取消收藏" else "收藏",
-                            tint = if (isFavorite) Color(0xFFFF5A79) else Color.White.copy(alpha = 0.7f)
+                IconButton(onClick = {
+                    if (viewModel.isOnlinePlaying) {
+                        // 在线歌：记录歌曲信息 → 显示在"喜欢"列表
+                        viewModel.toggleOnlineFavorite(
+                            song.title, song.artist, song.album,
+                            song.albumArtUri?.toString(), song.durationMs, song.uri.toString()
+                        )
+                    } else {
+                        viewModel.toggleFavorite(favId)
+                    }
+                }) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                        tint = if (isFavorite) Color(0xFFFF5A79) else Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // Fly 风格控制栏：收藏 / 下载 / 定时 / 队列 / 更多 / 分享
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 播放模式切换（顺序 → 列表循环 → 单曲循环 → 乱序）
+                val mode = viewModel.repeatMode
+                val cycleIcon = when (mode) {
+                    MusicViewModel.REPEAT_MODE_SHUFFLE -> Icons.Default.Shuffle
+                    Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
+                    else -> Icons.Default.Repeat
+                }
+                val cycleTint = if (mode == Player.REPEAT_MODE_OFF) {
+                    Color.White.copy(alpha = 0.5f)
+                } else {
+                    Color.White
+                }
+                IconButton(onClick = { viewModel.cycleRepeatMode() }) {
+                    Icon(cycleIcon, contentDescription = "播放模式", tint = cycleTint)
+                }
+                IconButton(onClick = {
+                    downloadSong = OnlineMetadataFetcher.OnlineSong(
+                        platform = if (viewModel.isOnlinePlaying) "在线播放" else "",
+                        id = "-1", title = song.title, artist = song.artist, album = song.album,
+                        artUrl = song.albumArtUri?.toString(), durationMs = song.durationMs
+                    )
+                }) {
+                    Icon(Icons.Default.Download, contentDescription = "下载", tint = Color.White.copy(alpha = 0.8f))
+                }
+                IconButton(onClick = { showQueue = true }) {
+                    Icon(Icons.Default.QueueMusic, contentDescription = "队列", tint = Color.White.copy(alpha = 0.8f))
+                }
+                // ⋮ 更多菜单（刷新封面/歌词/微调/标签/均衡器/下载）
+                Box {
+                    IconButton(onClick = { showSongMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "更多", tint = Color.White.copy(alpha = 0.8f))
+                    }
+                    DropdownMenu(
+                        expanded = showSongMenu,
+                        onDismissRequest = { showSongMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("刷新封面") },
+                            onClick = { showSongMenu = false; showCoverPicker = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("刷新歌词/歌手") },
+                            onClick = {
+                                showSongMenu = false
+                                LyricParser.clearLyricCache(playerContext, song.title, song.artist)
+                                lyricRefreshToken++
+                                if (song.artist.isBlank() || song.artist == "未知艺术家") {
+                                    viewModel.enhanceSongMetadata(song)
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("歌词微调") },
+                            onClick = { showSongMenu = false; showLyricAdjust = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("编辑标签") },
+                            onClick = { showSongMenu = false; showEditTag = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("均衡器") },
+                            onClick = { showSongMenu = false; showEqualizer = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("下载歌曲") },
+                            onClick = {
+                                showSongMenu = false
+                                downloadSong = OnlineMetadataFetcher.OnlineSong(
+                                    platform = if (viewModel.isOnlinePlaying) "在线播放" else "",
+                                    id = "-1",
+                                    title = song.title,
+                                    artist = song.artist,
+                                    album = song.album,
+                                    artUrl = song.albumArtUri?.toString(),
+                                    durationMs = song.durationMs
+                                )
+                            }
                         )
                     }
                 }
             }
 
-            Spacer(Modifier.height(28.dp))
-
-            // 进度条
+            // 进度条 + 上一首/播放/下一首（Fly 风格：进度条 + 右下大播放按钮）
             PlayerProgressBar(viewModel)
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(8.dp))
 
-            // 控制按钮行
-            PlayerControls(viewModel)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { viewModel.previous() }) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", tint = Color.White)
+                }
+                IconButton(
+                    onClick = { viewModel.togglePlayPause() },
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Icon(
+                        imageVector = if (viewModel.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (viewModel.isPlaying) "暂停" else "播放",
+                        tint = Color.White,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+                IconButton(onClick = { viewModel.next() }) {
+                    Icon(Icons.Default.SkipNext, contentDescription = "下一首", tint = Color.White)
+                }
+            }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(12.dp))
+        }
+
+        // 大歌词页（点击封面进入；覆盖层）
+        if (showFullLyrics) {
+            // 系统返回键 → 回到播放页（不是关闭播放页）
+            BackHandler { showFullLyrics = false }
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.92f))
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { showFullLyrics = false }) {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "收起", tint = Color.White)
+                        }
+                        Text("歌词", color = Color.White.copy(alpha = 0.85f), modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.width(48.dp))
+                    }
+                    LyricsView(
+                        viewModel = viewModel,
+                        song = song,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        refreshToken = lyricRefreshToken
+                    )
+                    PlayerProgressBar(viewModel)
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
         }
 
         // 播放队列弹窗
@@ -830,7 +891,8 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean, coverRefreshToken: 
 
     Box(
         modifier = Modifier
-            .size(300.dp)
+            .fillMaxWidth(1f)
+            .aspectRatio(1f)
             // 光晕：多层阴影
             .shadow(
                 elevation = 30.dp,
@@ -884,6 +946,7 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean, coverRefreshToken: 
 }
 
 /** 歌词视图：加载 .lrc 歌词 + 滚动跟随当前行高亮 */
+
 @Composable
 private fun LyricsView(
     viewModel: MusicViewModel,

@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -87,6 +88,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // SplashScreen API：让系统启动屏在首帧渲染后立即消失（用户几乎看不到圆角图标的"旧加载界面"）
+        val splashScreen = installSplashScreen()
+        splashScreen.setKeepOnScreenCondition { false }   // 首帧即关闭
         super.onCreate(savedInstanceState)
         // 仅读取媒体权限状态（不弹框）；弹框延后到主界面显示后，避免启动时多个界面叠加
         hasPermission = checkMediaPermission()

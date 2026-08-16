@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import com.dengdeng.music.data.AlbumGroup
 import com.dengdeng.music.data.MetadataEnhancer
+import com.dengdeng.music.data.OnlineMetadataFetcher
 import com.dengdeng.music.data.MusicRepository
 import com.dengdeng.music.data.Playlist
 import com.dengdeng.music.data.Song
@@ -20,11 +21,16 @@ import com.dengdeng.music.player.PlaybackService
 import com.dengdeng.music.player.PlayerControllerProvider
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * 主界面 ViewModel —— UI 与数据/播放服务的桥梁
@@ -401,6 +407,66 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         return counts.entries.sortedByDescending { it.value }.take(limit).map { it.key }
     }
 
+    /** 熟悉版种子歌（常听 + 喜欢 + 最近播放合并去重，title|artist 对，供"相似曲目"推荐；候选池大 → 每次随机抽不同种子） */
+    fun seedSongs(limit: Int = 5): List<Pair<String, String>> =
+        (topPlayedSongs.map { it.first } + favoriteSongs + recentSongs)
+            .distinctBy { "${it.title}|${it.artist}".lowercase() }
+            .take(limit)
+            .map { it.title to it.artist }
+
+    /** 收藏歌的歌手列表（按出现次数；供熟悉版推荐相似歌，范围放大） */
+    fun favoriteArtists(): List<String> {
+        val counts = HashMap<String, Int>()
+        favoriteSongs.forEach { song ->
+            if (song.artist.isBlank() || song.artist == "未知艺术家" || song.artist == "未知") return@forEach
+            counts[song.artist] = (counts[song.artist] ?: 0) + 1
+        }
+        return counts.entries.sortedByDescending { it.value }.map { it.key }
+    }
+
+    // ==================== 启动预加载（电台/冷门探索歌单） ====================
+
+    /** 启动时后台预生成的电台探索版歌单（进入电台时立即显示，无需等待） */
+    var preloadedRadio by mutableStateOf<List<OnlineMetadataFetcher.OnlineSong>>(emptyList())
+        private set
+
+    /** 启动时后台预生成的冷门探索歌单 */
+    var preloadedCold by mutableStateOf<List<OnlineMetadataFetcher.OnlineSong>>(emptyList())
+        private set
+
+    /** 启动预加载：后台生成电台探索版 + 冷门探索歌单（并行，检测可播性，只保留能播放的） */
+    fun preloadSmartPlaylists() {
+        viewModelScope.launch {
+            runCatching {
+                val hot = OnlineMetadataFetcher.fetchHotSongs(20, 3778678L, 4)
+                if (preloadedRadio.isEmpty()) preloadedRadio = filterPlayable(hot)
+            }
+        }
+        viewModelScope.launch {
+            runCatching {
+                val cold = OnlineMetadataFetcher.fetchColdSongs(60)
+                if (preloadedCold.isEmpty()) preloadedCold = filterPlayable(cold)
+            }
+        }
+    }
+
+    /** 并行解析（8 并发，缓存 URL）；不探测（探测在手机上不可靠，列表会空）+ 播放时兜底 */
+    private suspend fun filterPlayable(
+        songs: List<OnlineMetadataFetcher.OnlineSong>
+    ): List<OnlineMetadataFetcher.OnlineSong> = coroutineScope {
+        val gate = Semaphore(8)
+        songs.map { s -> async {
+            val ok = runCatching {
+                gate.withPermit {
+                    val url = OnlineMetadataFetcher.resolveOnlineUrl(s)
+                    cacheUrl(s, url)
+                    url != null
+                }
+            }.getOrDefault(false)
+            ok to s
+        } }.awaitAll().filter { it.first }.map { it.second }
+    }
+
     /** 常听的本地歌曲（按播放次数倒序，供电台「熟悉版」作为"已听过的歌"直接入队） */
     fun topSongs(limit: Int = 10): List<Song> =
         playHistory.entries
@@ -417,7 +483,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 睡眠定时任务 */
     private var sleepJob: Job? = null
 
-    /** 启动睡眠定时器（分钟） */
+    /** 启动睡眠定时器（定时停止播放） */
     fun startSleepTimer(minutes: Int) {
         sleepJob?.cancel()
         sleepTimerRemaining = minutes * 60L
@@ -439,7 +505,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** 是否正在扫描 */
-    var isLoading by mutableStateOf(false)
+    var isLoading by mutableStateOf(true)   // 初始 true：启动显示"加载中"，避免空态闪现
 
     /** 当前播放的歌曲索引 */
     var currentIndex by mutableStateOf(-1)
@@ -505,6 +571,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 searchHistory = UserLibraryStore.searchHistoryFlow(context).first()
                 lyricOffsets = UserLibraryStore.lyricOffsetsFlow(context).first()
                 skipSongs = UserLibraryStore.skipListFlow(context).first()
+                recentRadioKeys = UserLibraryStore.recentRadioKeysFlow(context).first()
+                recentColdKeys = UserLibraryStore.recentColdKeysFlow(context).first()
+                onlineFavorites = UserLibraryStore.onlineFavoritesFlow(context).first()
                 // 曲库缓存：启动立即显示上次的歌（避免每次重扫转圈）；后台 scanMusic 静默刷新
                 if (songs.isEmpty()) {
                     val cached = UserLibraryStore.songsCacheFlow(context).first()
@@ -515,6 +584,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+
+        // 启动时后台预生成电台/冷门探索歌单（用户进入时立即显示，无需等待加载）
+        preloadSmartPlaylists()
     }
 
     // ==================== 电台负反馈 ====================
@@ -522,6 +594,42 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 跳过歌集合（"歌名|歌手"，播放 <10s 就被切走即记录；电台推荐时过滤） */
     var skipSongs by mutableStateOf<Set<String>>(emptySet())
         private set
+
+    /** 上次推荐的电台歌曲 key 集合（"title|artist".lowercase()；刷新时过滤 → 每天大半更新） */
+    var recentRadioKeys by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** 上次推荐的冷门探索歌曲 key 集合（每次进入过滤 → 刷新大半） */
+    var recentColdKeys by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** 记住本次冷门探索推荐（下次进入过滤） */
+    fun rememberColdSongs(songs: List<OnlineMetadataFetcher.OnlineSong>) {
+        recentColdKeys = songs.map { "${it.title}|${it.artist}".lowercase() }.toSet()
+        val ctx = getApplication<Application>()
+        viewModelScope.launch { runCatching { UserLibraryStore.saveRecentColdKeys(ctx, recentColdKeys) } }
+    }
+
+    /** 记住本次电台推荐（刷新时过滤掉，保证大半新歌；电台界面 songs 为 OnlineSong 列表） */
+    fun rememberRadioSongs(songs: List<OnlineMetadataFetcher.OnlineSong>) {
+        recentRadioKeys = songs.map { "${it.title}|${it.artist}".lowercase() }.toSet()
+        val ctx = getApplication<Application>()
+        viewModelScope.launch { runCatching { UserLibraryStore.saveRecentRadioKeys(ctx, recentRadioKeys) } }
+    }
+
+    // ==================== 音源 URL 缓存（每首歌只解析 1 次，播放零请求） ====================
+
+    /** 已验证可播的音源 URL 缓存：title|artist(lowercase) → URL（null=失败标记，不重复解析） */
+    private val urlCache = mutableMapOf<String, String?>()
+
+    /** 取缓存的音源 URL（无缓存返回 null） */
+    fun cachedUrl(song: OnlineMetadataFetcher.OnlineSong): String? =
+        urlCache["${song.title}|${song.artist}".lowercase()]
+
+    /** 缓存音源 URL（列表生成时解析一次，播放直接复用） */
+    fun cacheUrl(song: OnlineMetadataFetcher.OnlineSong, url: String?) {
+        urlCache["${song.title}|${song.artist}".lowercase()] = url
+    }
 
     /** 记录上一次切走的歌（用于判断 10 秒内切歌） */
     private var lastSongKey: String? = null
@@ -605,7 +713,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** 在线队列播放（电台/批量：多首在线流，可切歌）；isRadio=true 表示电台队列（播完触发自动刷新） */
-    fun playOnlineQueue(songs: List<Song>, isRadio: Boolean = false) {
+    fun playOnlineQueue(songs: List<Song>, isRadio: Boolean = false, startIndex: Int = 0) {
         if (songs.isEmpty()) return
         val ctrl = controller ?: return
         val infos = songs.map { song ->
@@ -623,8 +731,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         activeQueue = emptyList()
         onlineQueue = songs
         radioMode = isRadio
-        currentIndex = 0
-        ctrl.setMediaItems(items, 0, 0L)
+        val idx = startIndex.coerceIn(0, songs.size - 1)
+        currentIndex = idx
+        ctrl.setMediaItems(items, idx, 0L)
         ctrl.prepare()
         ctrl.play()
     }
@@ -670,7 +779,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             // 电台负反馈：上一首播放 <10s 就切走 → 记录跳过（currentPositionMs 此时还是上一首的位置）
-            recordSkipIfTooFast(currentPositionMs)
+            // 负反馈推荐已移除（用户要求：不因跳太快减少推荐）
             // 记录当前歌 key（供下次切歌判断）
             lastSongKey = mediaItem?.mediaMetadata?.title?.toString()?.let { t ->
                 val a = mediaItem.mediaMetadata.artist?.toString() ?: ""
@@ -708,6 +817,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             if (playbackState == Player.STATE_ENDED && radioMode && onlineQueue.isNotEmpty()) {
                 radioQueueEnded = true
             }
+        }
+
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            // 播放出错（音源失效/加载失败）→ 自动切下一首，不卡住（配合 5 秒守卫双保险）
+            runCatching { controller?.seekToNextMediaItem() }
+            runCatching { controller?.play() }
         }
     }
 
@@ -792,9 +907,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     var favoriteIds by mutableStateOf<Set<Long>>(emptySet())
         private set
 
-    /** 收藏的歌曲列表（按原顺序过滤） */
+    /** 在线收藏的歌（含歌曲信息，供"喜欢"列表显示） */
+    var onlineFavorites by mutableStateOf<List<UserLibraryStore.OnlineFavorite>>(emptyList())
+        private set
+
+    /** 收藏的歌曲列表（本地收藏 + 在线收藏合并；在线歌用负数 key 还原） */
     val favoriteSongs: List<Song>
-        get() = songs.filter { it.id in favoriteIds }
+        get() = songs.filter { it.id in favoriteIds } + onlineFavorites.map { it.toSong() }
 
     /** 加载收藏（init 或扫描后调用） */
     fun loadFavorites() {
@@ -817,6 +936,51 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 某首歌是否已收藏 */
     fun isFavorite(songId: Long): Boolean = songId in favoriteIds
+
+    /** 在线歌收藏 key（负数哈希，与本地正 id 不冲突；本地歌 id 均为正数） */
+    fun onlineFavoriteKey(title: String, artist: String): Long =
+        -(("$title|$artist").hashCode().toLong())
+
+    /** 在线歌是否已收藏 */
+    fun isOnlineFavorite(title: String, artist: String): Boolean =
+        isFavorite(onlineFavoriteKey(title, artist))
+
+    /** 切换在线歌收藏（记录歌曲信息 → 显示在"喜欢"列表） */
+    fun toggleOnlineFavorite(
+        title: String,
+        artist: String,
+        album: String = "",
+        artUrl: String? = null,
+        durationMs: Long = 0L,
+        url: String? = null
+    ) {
+        val key = onlineFavoriteKey(title, artist)
+        val isFav = isFavorite(key)
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            val nowFav = UserLibraryStore.toggleFavorite(ctx, key)
+            favoriteIds = if (nowFav) favoriteIds + key else favoriteIds - key
+            onlineFavorites = if (nowFav) {
+                onlineFavorites.filterNot { it.title == title && it.artist == artist } +
+                    UserLibraryStore.OnlineFavorite(title, artist, album, artUrl, durationMs, url)
+            } else {
+                onlineFavorites.filterNot { it.title == title && it.artist == artist }
+            }
+            runCatching { UserLibraryStore.saveOnlineFavorites(ctx, onlineFavorites) }
+        }
+    }
+
+    /** 在线收藏 → Song（负数 id 与本地正 id 不冲突；uri 即播放 URL） */
+    private fun UserLibraryStore.OnlineFavorite.toSong(): Song =
+        Song(
+            id = onlineFavoriteKey(title, artist),
+            title = title,
+            artist = artist,
+            album = album,
+            durationMs = durationMs,
+            uri = url?.let { android.net.Uri.parse(it) } ?: android.net.Uri.EMPTY,
+            albumArtUri = artUrl?.let { android.net.Uri.parse(it) }
+        )
 
     // ==================== 歌单 ====================
 

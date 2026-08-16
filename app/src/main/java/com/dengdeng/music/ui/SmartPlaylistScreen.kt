@@ -49,29 +49,45 @@ fun SmartPlaylistScreen(
     var coldSongs by remember { mutableStateOf<List<OnlineSong>>(emptyList()) }
     var coldLoading by remember { mutableStateOf(true) }
 
-    // 加载冷门探索（shuffle=true 刷新换一批；只过滤解析不出音源的歌，坏歌交给播放守卫）
+    // 加载冷门探索（每次进入/刷新都重新生成：随机冷门歌单 → 每次不同）
     suspend fun loadCold(shuffle: Boolean) {
         coldLoading = true
         val keys = viewModel.listenedSongKeys()
-        val fetched = OnlineMetadataFetcher.fetchColdSongs(60)
+        // 过滤本地/已听 + 上次推荐过的（每次进入刷新大半）+ 加大歌单池；
+        // 过滤不足 20 首 → 只过滤本地/已听（不过滤上次），避免过滤清零导致空列表
+        val base = OnlineMetadataFetcher.fetchColdSongs(120)
             .filterNot { "${it.title}|${it.artist}".lowercase() in keys }
+        val fetched = if (base.size >= 70) {
+            // 候选充足：滤掉上次全部推荐 → 大半新歌
+            base.filterNot { "${it.title}|${it.artist}".lowercase() in viewModel.recentColdKeys }
+        } else {
+            // 候选不足（一轮候选过了一遍）：只滤一半上次推荐 → 混入一半旧歌回来，保证有新东西又不空
+            val half = viewModel.recentColdKeys.shuffled().take(viewModel.recentColdKeys.size / 2).toSet()
+            base.filterNot { "${it.title}|${it.artist}".lowercase() in half }
+        }
+        // 解析并验证可播性 + 缓存 URL（播放零请求；网易云 CDN 探测实测可靠）
         val playable = coroutineScope {
             val gate = Semaphore(8)
             fetched.map { s -> async {
-                val url = runCatching {
-                    gate.withPermit { OnlineMetadataFetcher.resolveOnlineUrl(s) }
-                }.getOrNull()
-                (url != null) to s
+                val ok = runCatching {
+                    gate.withPermit {
+                        val url = OnlineMetadataFetcher.resolveOnlineUrl(s)
+                        viewModel.cacheUrl(s, url)
+                        url != null
+                    }
+                }.getOrDefault(false)
+                ok to s
             } }.awaitAll().filter { it.first }.map { it.second }
         }
         coldSongs = (if (shuffle) playable.shuffled() else playable).take(50)
+        // 记住本次推荐（下次进入过滤 → 刷新大半）；列表为空时不覆盖（避免过滤清零循环）
+        if (coldSongs.isNotEmpty()) viewModel.rememberColdSongs(coldSongs)
         coldLoading = false
     }
     LaunchedEffect(Unit) { loadCold(false) }
 
     // 各板块数据
     val topPlayed = viewModel.topPlayedSongs.take(50)
-    val recent = viewModel.recentSongs.take(50)
 
     Column(Modifier.fillMaxSize()) {
         // 顶部栏：返回 + 标题 + 说明
@@ -121,17 +137,10 @@ fun SmartPlaylistScreen(
                 modifier = Modifier.weight(1f)
             )
             SectionButton(
-                label = "最近播放",
-                icon = { Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                selected = section == 1,
-                onClick = { section = 1 },
-                modifier = Modifier.weight(1f)
-            )
-            SectionButton(
                 label = "冷门探索",
                 icon = { Icon(Icons.Default.Explore, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                selected = section == 2,
-                onClick = { section = 2 },
+                selected = section == 1,
+                onClick = { section = 1 },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -148,16 +157,6 @@ fun SmartPlaylistScreen(
                 songs = topPlayed.map { it.first to "${it.second} 次 · ${it.first.artist}" },
                 viewModel = viewModel,
                 playAll = { topPlayed.map { it.first } }
-            )
-            1 -> SongSection(
-                title = "最近播放",
-                count = recent.size,
-                subtitle = "最近听过的歌 · 含在线",
-                refreshVisible = false,
-                onRefresh = {},
-                songs = recent.map { it to "${it.artist} · ${fmtDuration(it.durationMs)}" },
-                viewModel = viewModel,
-                playAll = { recent }
             )
             else -> ColdSection(
                 songs = coldSongs,
@@ -291,7 +290,7 @@ private fun ColdSection(
             Column(Modifier.weight(1f)) {
                 Text("冷门探索", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    if (loading) "正在找冷门好歌…" else "平台冷门歌曲 · 非本地没听过 · ${songs.size} 首",
+                    if (loading) "正在检测音源（只推荐能播放的歌）…" else "平台冷门歌曲 · 非本地没听过 · ${songs.size} 首",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -332,11 +331,30 @@ private fun ColdSection(
                         subtitle = "${s.artist} · ${fmtDuration(s.durationMs)}",
                         isCurrent = now != null && now.title == s.title && now.artist == s.artist,
                         onClick = {
+                            // 以整个冷门列表为队列播放（从点击处开始），支持上一曲/下一曲；第一首时上一曲无效
                             scope.launch {
-                                val url = OnlineMetadataFetcher.resolveOnlineUrl(s)
-                                if (url != null) {
-                                    viewModel.playOnline(s.title, s.artist, url, s.artUrl, s.durationMs)
+                                val idx = songs.indexOfFirst { it.id == s.id }.coerceAtLeast(0)
+                                val queue = coroutineScope {
+                                    val gate = Semaphore(8)
+                                    songs.map { cs -> async {
+                                        // 优先用缓存 URL（列表生成时已解析验证）
+                                        val url = viewModel.cachedUrl(cs) ?: runCatching {
+                                            gate.withPermit { OnlineMetadataFetcher.resolveAndVerify(cs) }
+                                        }.getOrNull()?.also { viewModel.cacheUrl(cs, it) }
+                                        url?.let {
+                                            Song(
+                                                id = -1L,
+                                                title = cs.title,
+                                                artist = cs.artist,
+                                                album = "冷门探索",
+                                                durationMs = cs.durationMs,
+                                                uri = android.net.Uri.parse(it),
+                                                albumArtUri = cs.artUrl?.let { u -> android.net.Uri.parse(u) }
+                                            )
+                                        }
+                                    } }.awaitAll().filterNotNull()
                                 }
+                                if (queue.isNotEmpty()) viewModel.playOnlineQueue(queue, isRadio = false, startIndex = idx)
                             }
                         }
                     )

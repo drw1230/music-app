@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -242,6 +243,58 @@ object UserLibraryStore {
         return obj.toString()
     }
 
+    // ==================== 在线收藏（"喜欢"列表显示在线歌） ====================
+
+    /** 在线收藏的歌（含歌曲信息与播放 URL，供"喜欢"列表显示与播放） */
+    data class OnlineFavorite(
+        val title: String,
+        val artist: String,
+        val album: String,
+        val artUrl: String?,
+        val durationMs: Long,
+        val url: String?
+    )
+
+    private val KEY_ONLINE_FAVORITES = stringPreferencesKey("online_favorites_json")
+
+    /** 在线收藏列表 Flow */
+    fun onlineFavoritesFlow(context: Context): Flow<List<OnlineFavorite>> =
+        context.dataStore.data.map { prefs -> parseOnlineFavorites(prefs[KEY_ONLINE_FAVORITES] ?: "[]") }
+
+    /** 保存在线收藏列表 */
+    suspend fun saveOnlineFavorites(context: Context, list: List<OnlineFavorite>) {
+        val arr = JSONArray()
+        list.forEach { f ->
+            arr.put(
+                JSONObject()
+                    .put("title", f.title)
+                    .put("artist", f.artist)
+                    .put("album", f.album)
+                    .put("artUrl", f.artUrl ?: "")
+                    .put("durationMs", f.durationMs)
+                    .put("url", f.url ?: "")
+            )
+        }
+        context.dataStore.edit { prefs -> prefs[KEY_ONLINE_FAVORITES] = arr.toString() }
+    }
+
+    private fun parseOnlineFavorites(raw: String): List<OnlineFavorite> {
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                OnlineFavorite(
+                    title = o.optString("title", ""),
+                    artist = o.optString("artist", ""),
+                    album = o.optString("album", ""),
+                    artUrl = o.optString("artUrl", "").takeIf { it.isNotBlank() },
+                    durationMs = o.optLong("durationMs", 0L),
+                    url = o.optString("url", "").takeIf { it.isNotBlank() }
+                )
+            }
+        } catch (e: Exception) { emptyList() }
+    }
+
     // ==================== 在线播放记录（智能歌单统计） ====================
 
     /** 在线播放记录（key = "title|artist".lowercase()；存 URL 供智能歌单点击重播） */
@@ -440,6 +493,64 @@ object UserLibraryStore {
     // ==================== 电台负反馈（跳过歌） ====================
 
     /** 跳过歌集合（"歌名|歌手"，10秒内切走即记录，电台推荐时过滤） */
+    // ==================== 冷门探索最近推荐（每次进入刷新大半；30 天过期 → 旧歌重新可推） ====================
+
+    private val KEY_RECENT_COLD = stringPreferencesKey("recent_cold_keys_json")
+    private val KEY_RECENT_COLD_TS = longPreferencesKey("recent_cold_ts_ms")
+
+    /** 上次推荐的冷门探索歌曲 key 集合（超过 30 天自动过期返回空 → 旧歌重新可推） */
+    fun recentColdKeysFlow(context: Context): Flow<Set<String>> =
+        context.dataStore.data.map { prefs ->
+            val ts = prefs[KEY_RECENT_COLD_TS] ?: 0L
+            if (ts > 0 && System.currentTimeMillis() - ts > RECENT_EXPIRE_MS) {
+                emptySet()
+            } else {
+                try {
+                    val arr = JSONArray(prefs[KEY_RECENT_COLD] ?: "[]")
+                    (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }.toSet()
+                } catch (e: Exception) { emptySet() }
+            }
+        }
+
+    suspend fun saveRecentColdKeys(context: Context, keys: Set<String>) {
+        val arr = JSONArray()
+        keys.forEach { arr.put(it) }
+        context.dataStore.edit { prefs ->
+            prefs[KEY_RECENT_COLD] = arr.toString()
+            prefs[KEY_RECENT_COLD_TS] = System.currentTimeMillis()
+        }
+    }
+
+    // ==================== 电台最近推荐（每天刷新大半更新；30 天过期 → 旧歌重新可推） ====================
+
+    private val KEY_RECENT_RADIO = stringPreferencesKey("recent_radio_keys_json")
+    private val KEY_RECENT_RADIO_TS = longPreferencesKey("recent_radio_ts_ms")
+    private val RECENT_EXPIRE_MS = 30L * 24 * 3600 * 1000   // 一个月
+
+    /** 最近推荐的电台歌曲 key 集合（"title|artist".lowercase()；超过 30 天自动过期返回空 → 旧歌重新可推） */
+    fun recentRadioKeysFlow(context: Context): Flow<Set<String>> =
+        context.dataStore.data.map { prefs ->
+            val ts = prefs[KEY_RECENT_RADIO_TS] ?: 0L
+            if (ts > 0 && System.currentTimeMillis() - ts > RECENT_EXPIRE_MS) {
+                emptySet()   // 记忆过期：不再过滤，一轮新的候选重新开始
+            } else {
+                try {
+                    val arr = JSONArray(prefs[KEY_RECENT_RADIO] ?: "[]")
+                    (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }.toSet()
+                } catch (e: Exception) { emptySet() }
+            }
+        }
+
+    /** 保存最近推荐的电台歌曲 key 集合（同时记录时间戳） */
+    suspend fun saveRecentRadioKeys(context: Context, keys: Set<String>) {
+        val arr = JSONArray()
+        keys.forEach { arr.put(it) }
+        context.dataStore.edit { prefs ->
+            prefs[KEY_RECENT_RADIO] = arr.toString()
+            prefs[KEY_RECENT_RADIO_TS] = System.currentTimeMillis()
+        }
+    }
+
     fun skipListFlow(context: Context): Flow<Set<String>> =
         context.dataStore.data.map { prefs ->
             val raw = prefs[KEY_SKIP_LIST] ?: "[]"

@@ -2,4 +2,10 @@
 <resources>
     <!-- 深色模式下窗口背景用深色，避免启动闪烁 -->
     <style name="Theme.MusicApp" parent="android:Theme.Material.NoActionBar" />
+    <!-- 深色模式下启动屏主题与白天一致（背景同色 #0A0A0A） -->
+    <style name="Theme.MusicApp.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_brand</item>
+        <item name="postSplashScreenTheme">@style/Theme.MusicApp</item>
+    </style>
 </resources>

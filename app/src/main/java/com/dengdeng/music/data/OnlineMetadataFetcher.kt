@@ -9,9 +9,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.math.BigInteger
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.security.SecureRandom
+import java.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * 在线元数据获取（网易云音乐公开接口）：
@@ -303,6 +309,62 @@ object OnlineMetadataFetcher {
         "https://y.gtimg.cn/music/photo_new/T002R500x500M000$albummid.jpg"
 
     /** GET 请求并解析 JSON（UTF-8），失败返回 null */
+    // ==================== 网易云 weapi 加密（相似歌曲 simiSong 接口需要，老 API 已废弃） ====================
+
+    private val WEAPI_PRESET_KEY = "0CoJUm6Qyw8W8jud".toByteArray(Charsets.UTF_8)
+    private val WEAPI_IV = "0102030405060708".toByteArray(Charsets.UTF_8)
+    private val WEAPI_MODULUS_HEX =
+        "e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7b725152b3ab17a876aea8a5aa76d2e417629ec4ee341f56135fccf695280104e0312ecbda92557c93870114af6c9d05c4f7f0c3685b7a46bee255932575cce10b424d813cfe4875d3e82047b97ddef52741d546b8e289dc6935b3ece0462db0a22b8e7"
+    private val WEAPI_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    /** AES-CBC 加密（PKCS5 padding，与网易云一致） */
+    private fun aesCbcEncrypt(data: ByteArray, key: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(WEAPI_IV))
+        return cipher.doFinal(data)
+    }
+
+    /** 教科书 RSA 无 padding：secKey 反转 → m^e mod n → 256 位 hex */
+    private fun rsaNoPaddingEncrypt(data: ByteArray): String {
+        val n = BigInteger(WEAPI_MODULUS_HEX, 16)
+        val m = BigInteger(1, data.reversedArray())
+        val c = m.modPow(BigInteger.valueOf(65537L), n)
+        return c.toString(16).padStart(256, '0')
+    }
+
+    /** 生成 weapi 请求体（params + encSecKey，表单编码） */
+    private fun weapiBody(payload: JSONObject): String {
+        val secKey = (0 until 16)
+            .map { WEAPI_CHARS[SecureRandom().nextInt(WEAPI_CHARS.length)] }
+            .joinToString("")
+        // 第一层 AES（presetKey）→ base64 → 第二层 AES（随机 secKey）
+        val first = aesCbcEncrypt(payload.toString().toByteArray(Charsets.UTF_8), WEAPI_PRESET_KEY)
+        val b64 = Base64.getEncoder().encodeToString(first)
+        val params = aesCbcEncrypt(b64.toByteArray(Charsets.UTF_8), secKey.toByteArray(Charsets.UTF_8))
+        val encSecKey = rsaNoPaddingEncrypt(secKey.toByteArray(Charsets.UTF_8))
+        return "params=" + URLEncoder.encode(Base64.getEncoder().encodeToString(params), "UTF-8") +
+                "&encSecKey=" + encSecKey
+    }
+
+    /** POST weapi 接口并解析 JSON */
+    private fun weapiPost(path: String, payload: JSONObject): JSONObject? {
+        return try {
+            val conn = (URL("https://music.163.com" + path).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 6000
+                readTimeout = 6000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Pixel) Chrome/120 Mobile")
+                setRequestProperty("Referer", "https://music.163.com")
+                setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                doOutput = true
+            }
+            conn.outputStream.use { it.write(weapiBody(payload).toByteArray(Charsets.UTF_8)) }
+            readJson(conn)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun httpGet(url: URL): JSONObject? {
         return try {
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -798,16 +860,150 @@ object OnlineMetadataFetcher {
         }
 
     /**
+     * 相似曲目推荐（电台「熟悉版」数据源 v2：纯平台相似曲目，不含本地、不按歌手）：
+     * 种子歌（用户常听/喜欢的 title|artist）→ 网易云搜索拿 songId → simiSong 相似接口拉相似歌。
+     * 多首种子歌的相似结果混合 → 风格广泛；过滤已听；每首种子独立失败不影响整体。
+     */
+    suspend fun fetchSimilarSongs(
+        seedSongs: List<Pair<String, String>>,   // title to artist
+        listenedKeys: Set<String>,
+        perSeed: Int = 15,
+        limit: Int = 50
+    ): List<OnlineSong> = withContext(Dispatchers.IO) {
+        if (seedSongs.isEmpty()) return@withContext emptyList()
+        val results = coroutineScope {
+            seedSongs.map { (title, artist) ->
+                async {
+                    runCatching {
+                        // 1) 种子歌 → 网易云 songId（title+artist 搜索提高命中）
+                        val q = if (artist.isNotBlank() && artist != "未知艺术家" && artist != "未知") {
+                            "$title $artist"
+                        } else title
+                        val seed = searchSongsOnline(q, 1).firstOrNull() ?: return@async emptyList()
+                        // 2) weapi simiSong 相似曲目接口（老 api/discovery/simiSong 已废弃返回 400；参数名 songid 小写）
+                        val payload = JSONObject()
+                            .put("songid", seed.id.toLongOrNull() ?: 0L)
+                            .put("limit", perSeed)
+                            .put("offset", 0)
+                        val json = weapiPost("/weapi/v1/discovery/simiSong", payload)
+                        val songs = json?.optJSONArray("songs")
+                            ?: json?.optJSONObject("result")?.optJSONArray("songs")
+                        if (songs == null) emptyList() else {
+                            (0 until songs.length()).mapNotNull { i ->
+                                val s = songs.optJSONObject(i) ?: return@mapNotNull null
+                                val id = s.optLong("id", 0L)
+                                if (id <= 0L) return@mapNotNull null
+                                val artistsArr = s.optJSONArray("artists")
+                                val art = artistsArr
+                                    ?.takeIf { it.length() > 0 }
+                                    ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+                                OnlineSong(
+                                    platform = "网易云",
+                                    id = id.toString(),
+                                    title = s.optString("name", ""),
+                                    artist = art,
+                                    album = s.optJSONObject("album")?.optString("name", "") ?: "",
+                                    artUrl = s.optJSONObject("album")?.optString("picUrl", null)?.takeIf { it.isNotBlank() },
+                                    durationMs = s.optLong("duration", 0L)
+                                )
+                            }
+                        }
+                    }.getOrNull() ?: emptyList()
+                }
+            }.awaitAll().flatten()
+        }
+        val seenTitle = HashSet<String>()
+        val out = ArrayList<OnlineSong>()
+        for (s in results) {
+            val key = "${s.title}|${s.artist}".lowercase()
+            if (key in listenedKeys) continue          // 已听过的歌不再推荐
+            if (!seenTitle.add(s.title.lowercase())) continue  // 同名只留一首
+            out.add(s)
+            if (out.size >= limit) break
+        }
+        out
+    }
+
+    /**
+     * 随机歌单拉歌（电台「随机歌单」来源）：随机关键词搜索网易云歌单 → 拉取歌曲
+     * 关键词覆盖常见曲风/场景，每次随机 → 歌单多样
+     */
+    suspend fun fetchRandomSongs(limit: Int = 10): List<OnlineSong> = withContext(Dispatchers.IO) {
+        val keywords = listOf(
+            "华语经典", "民谣", "轻音乐", "摇滚", "说唱", "欧美", "纯音乐", "经典老歌", "粤语", "国风",
+            "独立音乐", "爵士", "电子", "后摇", "古风", "怀旧", "清新", "治愈", "咖啡", "旅行",
+            "夜店", "健身", "学习", "开车", "清晨", "深夜",
+            "钢琴", "小提琴", "吉他", "萨克斯", "口琴", "手风琴",
+            "老歌", "怀旧金曲", "红歌", "影视金曲", "动画", "游戏",
+            "雨声", "海浪", "森林", "星空"
+        )
+        val results = mutableListOf<OnlineSong>()
+        val kws = keywords.shuffled().take(3)   // 随机 3 个关键词轮询
+        for (kw in kws) {
+            if (results.size >= limit) break
+            val playlistIds = try {
+                val url = URL("https://music.163.com/api/search/get?s=${URLEncoder.encode(kw, "UTF-8")}&type=1000&limit=1")
+                val json = httpGet(url)
+                val playlists = json?.optJSONObject("result")?.optJSONArray("playlists")
+                (0 until (playlists?.length() ?: 0)).mapNotNull { i ->
+                    playlists?.optJSONObject(i)?.optLong("id", 0L)?.takeIf { it > 0 }
+                }
+            } catch (e: Exception) { emptyList() }
+            val pid = playlistIds.firstOrNull() ?: continue
+            try {
+                val url = URL("https://music.163.com/api/playlist/detail?id=$pid&updateTime=-1")
+                val json = httpGet(url)
+                val tracks = json?.optJSONObject("result")?.optJSONArray("tracks")
+                if (tracks != null) {
+                    for (i in 0 until tracks.length()) {
+                        if (results.size >= limit) break
+                        val s = tracks.optJSONObject(i) ?: continue
+                        val id = s.optLong("id", 0L)
+                        if (id <= 0L) continue
+                        val artistsArr = s.optJSONArray("artists")
+                        val artist = artistsArr
+                            ?.takeIf { it.length() > 0 }
+                            ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+                        results.add(
+                            OnlineSong(
+                                platform = "网易云",
+                                id = id.toString(),
+                                title = s.optString("name", ""),
+                                artist = artist,
+                                album = s.optJSONObject("album")?.optString("name", "") ?: "",
+                                artUrl = s.optJSONObject("album")?.optString("picUrl", null)?.takeIf { it.isNotBlank() },
+                                durationMs = s.optLong("duration", 0L)
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) { }
+        }
+        results.distinctBy { "${it.title}|${it.artist}".lowercase() }.take(limit)
+    }
+
+    /**
      * 平台冷门歌曲（智能歌单「冷门探索」数据源）
      * 搜索网易云"冷门/小众"主题歌单 → 拉取歌单歌曲，合并去重
      */
     suspend fun fetchColdSongs(limit: Int = 50): List<OnlineSong> = withContext(Dispatchers.IO) {
         val results = mutableListOf<OnlineSong>()
-        val keywords = listOf("冷门宝藏歌曲", "小众好听歌曲", "冷门神曲")
-        for (kw in keywords) {
+        // 大关键词池：每次随机选 6 个 + 随机翻页 → 每次拉到不同的冷门歌单，歌单不重复
+        val keywords = listOf(
+            "冷门宝藏歌曲", "小众好听歌曲", "冷门神曲", "冷门好歌", "宝藏歌曲",
+            "私藏歌单", "小众音乐", "遗珠", "被遗忘的好歌", "冷门经典",
+            "民谣", "独立音乐", "后摇", "纯音乐", "轻音乐",
+            "国风", "古风", "粤语", "欧美小众", "爵士",
+            "电子", "说唱", "摇滚", "现场", "翻唱", "清唱",
+            "怀旧金曲", "老歌", "经典", "粤语老歌", "闽南语",
+            "钢琴曲", "小提琴", "吉他", "萨克斯", "口琴",
+            "雨天", "夜晚", "孤独", "温柔", "安静"
+        )
+        for (kw in keywords.shuffled().take(6)) {
             if (results.size >= limit) break
             val playlistIds = try {
-                val url = URL("https://music.163.com/api/search/get?s=${URLEncoder.encode(kw, "UTF-8")}&type=1000&limit=2")
+                val page = (0..3).random()   // 随机翻页，避免每次都取前几个歌单
+                val url = URL("https://music.163.com/api/search/get?s=${URLEncoder.encode(kw, "UTF-8")}&type=1000&limit=3&offset=$page")
                 val json = httpGet(url)
                 val playlists = json?.optJSONObject("result")?.optJSONArray("playlists")
                 (0 until (playlists?.length() ?: 0)).mapNotNull { i ->
@@ -868,14 +1064,84 @@ object OnlineMetadataFetcher {
                 "User-Agent",
                 "Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36"
             )
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
+            conn.connectTimeout = 6000
+            conn.readTimeout = 6000
             val code = conn.responseCode
             conn.disconnect()
             code == 200 || code == 206
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * 流式嗅探：与播放器相同 UA/Referer 发 GET，只读前 2KB 验证是真实音频流。
+     * 比 Range 探测可靠（CDN 防盗链拦探测时，播放也会同样失败 → 探测结果≈真实播放）。
+     * 返回 true = 该音源能跑得动。
+     */
+    fun isStreamPlayable(url: String): Boolean {
+        return try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36"
+                )
+                // 与平台匹配的 Referer（播放时也带，保持一致）
+                setRequestProperty("Referer", platformReferer(url))
+                connectTimeout = 6000
+                readTimeout = 6000
+            }
+            if (conn.responseCode !in 200..299) {
+                conn.disconnect()
+                return false
+            }
+            // 注意：不能用 readNBytes()（Java 9/Android 13+ API，minSdk 26 设备会 NoSuchMethodError）
+            val buf = ByteArray(2048)
+            val len = conn.inputStream.use { inp -> inp.read(buf) }
+            conn.disconnect()
+            if (len <= 0) return false
+            looksLikeAudio(buf.copyOfRange(0, len))
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** 按 URL 主机返回平台 Referer */
+    private fun platformReferer(url: String): String = when {
+        url.contains("163.cn") || url.contains("music.163") || url.contains("126.net") -> "https://music.163.com"
+        url.contains("y.qq.com") || url.contains("qq.com") -> "https://y.qq.com"
+        url.contains("kugou.com") || url.contains("kgimg.com") || url.contains("krc") -> "https://www.kugou.com"
+        else -> "https://music.163.com"
+    }
+
+    /** 前 2KB 是否像音频流（MP3/FLAC/OGG/WAV/M4A 特征字节） */
+    private fun looksLikeAudio(bytes: ByteArray): Boolean {
+        if (bytes.size < 4) return false
+        fun c(i: Int, ch: Char) = bytes[i] == ch.code.toByte()
+        // ID3（MP3 带标签）
+        if (c(0, 'I') && c(1, 'D') && c(2, '3')) return true
+        // MP3/ADTS 帧同步 0xFF Ex
+        val b0 = bytes[0].toInt() and 0xFF
+        val b1 = bytes[1].toInt() and 0xFF
+        if (b0 == 0xFF && (b1 and 0xE0) == 0xE0) return true
+        // fLaC / OggS / RIFF
+        if (c(0, 'f') && c(1, 'L') && c(2, 'a') && c(3, 'C')) return true
+        if (c(0, 'O') && c(1, 'g') && c(2, 'g') && c(3, 'S')) return true
+        if (c(0, 'R') && c(1, 'I') && c(2, 'F') && c(3, 'F')) return true
+        // M4A/MP4: ftyp（第 4 字节起）
+        if (bytes.size >= 8 && c(4, 'f') && c(5, 't') && c(6, 'y') && c(7, 'p')) return true
+        return false
+    }
+
+    /**
+     * 解析并验证可播性（一次调用合并两件事）：
+     * 解析出播放 URL → 流式嗅探确认能出音频流 → 返回 URL；否则 null。
+     * 实测：网易云 CDN 在 UA/Referer 下稳定返回 200+ID3，探测可靠。
+     */
+    suspend fun resolveAndVerify(song: OnlineSong): String? {
+        val url = resolveOnlineUrl(song) ?: return null
+        return if (isStreamPlayable(url)) url else null
     }
 
     /**
