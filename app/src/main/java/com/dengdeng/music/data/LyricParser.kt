@@ -89,23 +89,26 @@ object LyricParser {
                     return@withContext parse(text)
                 }
 
-                // 方法2：联网获取（网易云搜索 + 歌词），成功则缓存到 cacheDir
+                // 方法2：联网获取（网易云 → QQ音乐 多源兜底），成功则缓存到 cacheDir
                 val cacheFile = lyricCacheFile(context, title, artist)
                 val cachedText = if (cacheFile.exists()) cacheFile.readText(Charsets.UTF_8) else null
                 if (!cachedText.isNullOrBlank()) return@withContext parse(cachedText)
 
-                val match = OnlineMetadataFetcher.searchSong(title, artist)
-                    ?: return@withContext emptyList()
-                val lyricText = OnlineMetadataFetcher.fetchLyric(match.songId)
-                    ?: return@withContext emptyList()
-                if (lyricText.isNotBlank()) {
-                    runCatching {
-                        cacheFile.parentFile?.mkdirs()
-                        cacheFile.writeText(lyricText, Charsets.UTF_8)
-                    }
-                    return@withContext parse(lyricText)
+                // 网易云
+                val lyricText = run {
+                    val match = OnlineMetadataFetcher.searchSong(title, artist)
+                    match?.songId?.let { OnlineMetadataFetcher.fetchLyric(it) }
+                        ?: // QQ 音乐兜底
+                        OnlineMetadataFetcher.searchSongQQ(title, artist)
+                            ?.songmid
+                            ?.let { OnlineMetadataFetcher.fetchLyricQQ(it) }
                 }
-                emptyList()
+                if (lyricText.isNullOrBlank()) return@withContext emptyList()
+                runCatching {
+                    cacheFile.parentFile?.mkdirs()
+                    cacheFile.writeText(lyricText, Charsets.UTF_8)
+                }
+                return@withContext parse(lyricText)
             } catch (e: Exception) {
                 emptyList()
             }

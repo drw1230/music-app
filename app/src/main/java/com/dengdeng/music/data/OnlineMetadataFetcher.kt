@@ -24,6 +24,15 @@ object OnlineMetadataFetcher {
         val albumArtUrl: String?
     )
 
+    /** QQ 音乐匹配结果 */
+    data class QQMatch(
+        val songmid: String,
+        val albummid: String?,
+        val title: String,
+        val artist: String,
+        val durationMs: Long
+    )
+
     // 内存缓存：搜索 key（title|artist）→ 匹配结果，避免每次切歌都重复请求
     private val matchCache = mutableMapOf<String, SongMatch>()
     // 封面缓存：key（title|artist）→ 封面 URL
@@ -76,8 +85,16 @@ object OnlineMetadataFetcher {
         // —— 网易云兜底（专辑封面或歌手头像）——
         val match = searchSong(title, artist, durationMs)
         val neteaseArt = match?.albumArtUrl
-        if (neteaseArt != null) artworkCache[key] = neteaseArt
-        return@withContext neteaseArt
+        if (neteaseArt != null) {
+            artworkCache[key] = neteaseArt
+            return@withContext neteaseArt
+        }
+
+        // —— QQ 音乐兜底（albummid → 封面 URL）——
+        val qq = searchSongQQ(title, artist, durationMs)
+        val qqArt = qq?.albummid?.takeIf { it.isNotBlank() }?.let { qqAlbumArtUrl(it) }
+        if (qqArt != null) artworkCache[key] = qqArt
+        return@withContext qqArt
     }
 
     /** 搜索歌曲，返回最佳匹配（按时长接近度，无时长信息则取第一个） */
@@ -137,6 +154,61 @@ object OnlineMetadataFetcher {
         return@withContext lyric
     }
 
+    // ==================== QQ 音乐备选源 ====================
+
+    /**
+     * QQ 音乐搜索（备选源）：w 参数公开接口
+     * 返回最佳匹配（按时长校准），含 songmid（歌词）与 albummid（封面）
+     */
+    suspend fun searchSongQQ(title: String, artist: String, durationMs: Long? = null): QQMatch? = withContext(Dispatchers.IO) {
+        if (title.isBlank()) return@withContext null
+        val query = URLEncoder.encode("$title $artist".trim(), "UTF-8")
+        val url = URL("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=$query&format=json&n=5&p=1")
+        val json = httpGetWithHeaders(url) ?: return@withContext null
+
+        val list = json.optJSONObject("data")?.optJSONObject("song")?.optJSONArray("list")
+            ?: return@withContext null
+
+        var best: QQMatch? = null
+        var bestDiff = Long.MAX_VALUE
+        for (i in 0 until list.length()) {
+            val s = list.optJSONObject(i) ?: continue
+            val songmid = s.optString("songmid", "").takeIf { it.isNotBlank() } ?: continue
+            val name = s.optString("songname", title)
+            val singerName = s.optJSONArray("singer")
+                ?.takeIf { it.length() > 0 }
+                ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+            val albummid = s.optString("albummid", "").takeIf { it.isNotBlank() }
+            val durMs = s.optLong("interval", 0L) * 1000L   // interval 单位是秒
+            val match = QQMatch(songmid, albummid, name, singerName, durMs)
+
+            if (durationMs != null && durMs > 0) {
+                val diff = kotlin.math.abs(durMs - durationMs)
+                if (diff < bestDiff) {
+                    bestDiff = diff
+                    best = match
+                }
+            } else {
+                best = match
+                break
+            }
+        }
+        return@withContext best
+    }
+
+    /** 按 QQ songmid 获取 LRC 歌词 */
+    suspend fun fetchLyricQQ(songmid: String): String? = withContext(Dispatchers.IO) {
+        if (songmid.isBlank()) return@withContext null
+        val url = URL("https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=$songmid&format=json&nobase64=1")
+        val json = httpGetWithHeaders(url) ?: return@withContext null
+        val lyric = json.optString("lyric", "").takeIf { it.isNotBlank() }
+        return@withContext lyric
+    }
+
+    /** 由 QQ albummid 拼出封面 URL（500x500） */
+    fun qqAlbumArtUrl(albummid: String): String =
+        "https://y.gtimg.cn/music/photo_new/T002R500x500M000$albummid.jpg"
+
     /** GET 请求并解析 JSON（UTF-8），失败返回 null */
     private fun httpGet(url: URL): JSONObject? {
         return try {
@@ -147,21 +219,42 @@ object OnlineMetadataFetcher {
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 setRequestProperty("Accept", "application/json")
             }
-            if (conn.responseCode != 200) {
-                conn.disconnect()
-                return null
-            }
-            val reader = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8"))
-            val sb = StringBuilder()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                sb.append(line)
-            }
-            reader.close()
-            conn.disconnect()
-            JSONObject(sb.toString())
+            readJson(conn)
         } catch (e: Exception) {
             null
         }
+    }
+
+    /** GET 请求（带 Referer，QQ 音乐接口需要）并解析 JSON */
+    private fun httpGetWithHeaders(url: URL): JSONObject? {
+        return try {
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                setRequestProperty("Referer", "https://y.qq.com")
+                setRequestProperty("Accept", "application/json")
+            }
+            readJson(conn)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun readJson(conn: HttpURLConnection): JSONObject? {
+        if (conn.responseCode != 200) {
+            conn.disconnect()
+            return null
+        }
+        val reader = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8"))
+        val sb = StringBuilder()
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            sb.append(line)
+        }
+        reader.close()
+        conn.disconnect()
+        return JSONObject(sb.toString())
     }
 }
