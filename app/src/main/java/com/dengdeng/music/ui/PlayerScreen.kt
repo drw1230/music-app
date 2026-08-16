@@ -132,6 +132,7 @@ fun PlayerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(Color(0xFF101014))   // 播放页深色背景（Fly 风格，白色歌词才清晰）
             // 跟手位移 + 透明度渐变（滑得越多越透明）
             .graphicsLayer {
                 translationX = dragX.value
@@ -307,6 +308,9 @@ fun PlayerScreen(
                     }
                 }
             }
+
+            // 小歌词下移（封面与小歌词之间留白，填充封面与歌名之间的空间）
+            Spacer(Modifier.height(72.dp))
 
             // 小歌词（5 行：前2/前1/当前/后1/后2；点击进大歌词页）
             MiniLyricsView(
@@ -989,57 +993,56 @@ private fun MiniLyricsView(
         when {
             !loaded -> Text(
                 "歌词加载中…",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, fontWeight = FontWeight.Medium),
+                color = Color.White
             )
             lyrics.isEmpty() -> Text(
                 "暂无歌词 · 点击查看",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, fontWeight = FontWeight.Medium),
+                color = Color.White
             )
             else -> {
                 // 前二句（更暗）
                 Text(
                     lyrics.getOrNull(currentIndex - 2)?.text ?: " ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                    color = Color.White.copy(alpha = 0.4f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
                 // 前一句
                 Text(
                     lyrics.getOrNull(currentIndex - 1)?.text ?: " ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                    color = Color.White.copy(alpha = 0.7f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
                 // 当前句（高亮）
                 Text(
                     lyrics.getOrNull(currentIndex)?.text ?: " ",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 30.sp, fontWeight = FontWeight.Bold),
+                    color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
                 // 下一句
                 Text(
                     lyrics.getOrNull(currentIndex + 1)?.text ?: " ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                    color = Color.White.copy(alpha = 0.7f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
                 // 后二句（更暗）
                 Text(
                     lyrics.getOrNull(currentIndex + 2)?.text ?: " ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                    color = Color.White.copy(alpha = 0.4f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
