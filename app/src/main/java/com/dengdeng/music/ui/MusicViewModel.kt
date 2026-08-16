@@ -449,6 +449,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (ctrl.isPlaying) ctrl.pause() else ctrl.play()
     }
 
+    /** 暂停播放（拖动进度条时调用，拖动中不发声） */
+    fun pause() {
+        controller?.pause()
+    }
+
     /** 随机播放：从当前显示列表随机选一首开始播放 */
     fun shufflePlay() {
         val songList = filteredSongs

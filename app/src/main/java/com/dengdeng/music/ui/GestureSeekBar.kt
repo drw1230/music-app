@@ -45,6 +45,8 @@ fun GestureSeekBar(
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
     onDragState: (dragging: Boolean, progress: Float) -> Unit = { _, _ -> },
+    onDragStart: () -> Unit = {},
+    onSeekPreview: (Long) -> Unit = onSeek,
     thumbColor: Color = Color.White,
     progressColor: Color = Color.White,
     trackColor: Color = Color.White.copy(alpha = 0.25f),
@@ -110,6 +112,8 @@ fun GestureSeekBar(
                             accumulated = newX - startX
                             if (!isDrag && abs(accumulated) > touchSlopPx) {
                                 isDrag = true
+                                // 拖动开始：暂停播放（拖动中不发声，手指静止时停在当前位置）
+                                onDragStart()
                                 // 基准 = 判定时刻最新位置 - 已累计位移（拇指从当前显示位置无缝衔接，避免闪跳）
                                 dragStartMs = currentPos - (accumulated / barWidthPx * currentDur).toLong()
                             }
@@ -118,8 +122,8 @@ fun GestureSeekBar(
                                 isDragging = true
                                 val target = dragStartMs + (accumulated / barWidthPx * currentDur).toLong()
                                 val clamped = target.coerceIn(0L, currentDur.coerceAtLeast(0L))
-                                // 实时 seek：拖到哪儿就在哪儿播放（主流播放器体验）
-                                onSeek(clamped)
+                                // 拖动中：预览 seek（保持暂停，位置实时跟随手指）
+                                onSeekPreview(clamped)
                                 // 实时回调当前显示进度（供时间文字跟随）
                                 val dp = if (currentDur > 0) {
                                     (clamped.toFloat() / currentDur).coerceIn(0f, 1f)

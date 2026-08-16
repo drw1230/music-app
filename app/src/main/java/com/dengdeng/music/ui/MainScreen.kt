@@ -1310,6 +1310,8 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                 positionMs = viewModel.currentPositionMs,
                 durationMs = viewModel.durationMs,
                 onSeek = { viewModel.seekAndPlay(it) },
+                onDragStart = { viewModel.pause() },
+                onSeekPreview = { viewModel.seekTo(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp),
