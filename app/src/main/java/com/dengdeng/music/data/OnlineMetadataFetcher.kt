@@ -754,6 +754,28 @@ object OnlineMetadataFetcher {
     }
 
     /**
+     * 按歌手取平台热门歌（电台「熟悉版」数据源）
+     * 输入我最常听的歌手列表，并行搜索每个歌手的热门歌曲（网易云+QQ 双源），合并去重后截断
+     */
+    suspend fun fetchFamiliarSongs(artists: List<String>, perArtist: Int = 6, limit: Int = 40): List<OnlineSong> =
+        withContext(Dispatchers.IO) {
+            if (artists.isEmpty()) return@withContext emptyList()
+            val results = coroutineScope {
+                artists.map { artist ->
+                    async {
+                        runCatching { searchSongsOnline(artist, perArtist) }.getOrNull() ?: emptyList()
+                    }
+                }.awaitAll().flatten()
+            }
+            val dedup = LinkedHashMap<String, OnlineSong>()
+            for (s in results) {
+                val k = "${s.title}|${s.artist}".lowercase()
+                if (!dedup.containsKey(k)) dedup[k] = s
+            }
+            dedup.values.toList().take(limit)
+        }
+
+    /**
      * 解析单曲的可用播放 URL（按平台单请求，供电台/试听快速取流）
      * 优先 高品（网易云 320k / QQ M800 / 酷狗 320k），失败降级标准
      */

@@ -28,9 +28,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 每日电台界面：双榜热歌（网易云 + QQ）→ 每日推荐
@@ -54,24 +51,28 @@ fun OnlineRadioScreen(
     var downloadState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     // 是否已自动播放过（进入界面自动播一次）
     var autoPlayed by remember { mutableStateOf(false) }
+    // 电台模式：false=探索版（平台热榜为主） true=熟悉版（常听歌手热歌为主）
+    var familiarMode by remember { mutableStateOf(false) }
 
-    // 日期
-    val today = remember {
-        SimpleDateFormat("M月d日", Locale.getDefault()).format(Date())
-    }
-
-    /** 加载电台（刷新时 force 重新拉取） */
-    fun loadRadio(force: Boolean) {
+    /** 加载电台（force=强制重新拉取；autoPlay=加载完成后自动播放——切模式用） */
+    fun loadRadio(force: Boolean, autoPlay: Boolean = false) {
         scope.launch {
             loading = true
             error = false
-            val hot = OnlineMetadataFetcher.fetchHotSongs(20)
+            val hot = if (familiarMode) {
+                // 熟悉版：按我最常听的歌手取平台热歌
+                OnlineMetadataFetcher.fetchFamiliarSongs(viewModel.topArtists(5))
+            } else {
+                // 探索版：网易云 + QQ 双榜热歌
+                OnlineMetadataFetcher.fetchHotSongs(20)
+            }
             val skip = viewModel.skipSongs
             songs = if (skip.isEmpty()) hot else hot.filterNot {
                 "${it.title}|${it.artist}" in skip
             }
             loading = false
             if (songs.isEmpty()) error = true
+            else if (autoPlay) playRadio()   // 切模式后直接播新模式
         }
     }
 
@@ -153,9 +154,32 @@ fun OnlineRadioScreen(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "$today · 网易云热歌榜 + QQ热歌榜",
+                    if (familiarMode) "熟悉版 · 常听歌手热歌" else "探索版 · 网易云热歌榜 + QQ热歌榜",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 模式切换：探索版 / 熟悉版
+            listOf("探索版" to false, "熟悉版" to true).forEach { (label, mode) ->
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (familiarMode == mode) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(
+                            if (familiarMode == mode) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            else Color.Transparent
+                        )
+                        .clickable(enabled = !loading) {
+                            if (familiarMode != mode) {
+                                familiarMode = mode
+                                autoPlayed = true   // 阻止旧列表自动播放，改由 loadRadio 加载完直接播新模式
+                                loadRadio(true, autoPlay = true)
+                            }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                 )
             }
             // 刷新电台

@@ -299,6 +299,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 songs.firstOrNull { it.id == entry.key }?.let { it to entry.value }
             }
 
+    /** 最常听的歌手（按累计播放次数倒序，供电台「熟悉版」取歌手热歌） */
+    fun topArtists(limit: Int = 5): List<String> {
+        val counts = HashMap<String, Int>()
+        for ((id, times) in playHistory) {
+            val artist = songs.firstOrNull { it.id == id }?.artist ?: continue
+            if (artist.isBlank() || artist == "未知艺术家" || artist == "未知") continue
+            counts[artist] = (counts[artist] ?: 0) + times
+        }
+        return counts.entries.sortedByDescending { it.value }.take(limit).map { it.key }
+    }
+
     // ==================== 睡眠定时器 ====================
 
     /** 睡眠定时剩余秒数（0 = 未开启） */

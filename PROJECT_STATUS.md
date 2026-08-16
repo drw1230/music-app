@@ -35,17 +35,19 @@
 | v3-3f | 2110072 | 迷你条点击（本地/在线）均可进全屏播放界面 |
 | CI | 071007d→fda59d5 | GitHub Actions 云端构建 + 签名统一（keystore 入仓库） |
 
-## 三、当前进度（2026-08-16）
+## 三、当前进度（2026-08-16 16:00）
 
 - ✅ **功能全部完成**（最近一轮 2110072：在线试听统一迷你条 + 点迷你条进全屏）
-- ✅ **CI 云端构建已跑通**（仓库内 `app/debug.keystore` 保证签名与手机一致，可覆盖安装保留数据）
-- ⏳ **最后一轮构建**（`be36c3a`，含 keystore 入仓库签名方案）等待完成 → 下载最新 `music-app-debug-apk` → adb 覆盖安装 → 验证
-- ⚠️ **手机现状**：装的是 12:15 本机构建的 638c676（试听统一迷你条 + 搜索历史聚焦，但**在线歌点迷你条不进全屏**）
+- ✅ **CI 云端构建出包正常**（be36c3a 曾因 SigningConfig 重名失败 → 379b142 修复；签名用仓库内 keystore）
+- ✅ **本地播放 Source error bug 已修复**（c4446a0：在线 UA 数据源全局覆盖导致 content:// 加载失败，改 DefaultDataSource 按 scheme 分发）→ 真机复验：本地播放 + 电台→曲库切换均正常
+- ✅ **仓库已改 Private**（匿名访问 404 即此原因）
+- APK 本地位置：`E:\tmp\ci-logs\apk\app-debug.apk`（最新 c4446a0）
 
 ## 四、构建环境（重要！本机已改云端）
 
 - **本机 Gradle 构建 12:06 起彻底异常**：`Failed to load native library 'native-platform.dll'`（Gradle 写 .lock 被系统"拒绝访问"），重启×4/坚果云全停/Defender 关闭均无效 → **改用 GitHub Actions 云端构建**
-- **以后构建流程**：改代码 → git push → Actions 自动构建（约 6-10 分钟）→ 下载 artifact → adb 安装
+- **以后构建流程**：改代码 → `git push`（SSH，免 token）→ Actions 自动构建（**已加依赖缓存，二次构建 3-4 分钟**）→ 下载 artifact → adb 安装
+- **git remote 已切 SSH**：`git@github.com:drw1230/music-app.git`（~/.ssh/id_ed25519_github + config 走 ssh.github.com:443，6/4 已配好）
 - 本机 E:\gradle-fresh 保留（依赖完整 2.3G），gradle.properties 已加 `org.gradle.vfs.watch=false`；若本机恢复可继续用（详见 MEMORY v5）
 - 手机 adb 连接正常：`R5CWC08ZBET`
 
@@ -59,7 +61,8 @@
 
 ## 六、待办 / 提醒
 
-1. 等待 CI 最后一轮构建 → 下载 → 覆盖安装 → 用户验证（迷你条点在线歌进全屏等）
-2. GitHub token 已在聊天暴露，建议用户撤销重建（`repo` + `workflow` 两个 scope）
-3. 仓库当前**公开**——若不想公开源码，改 Private
-4. 用户反馈后如有新需求 → 直接改代码 push → CI 出包
+1. **用户验证**：最新 APK（c4446a0）已装到手机——本地播放/电台/搜索试听回归
+2. GitHub token（ghp_0eC5...）已暴露 → **SSH push 已通，token 可撤销**（Settings → Developer settings → tokens → Delete）；如需 API 查询可另建 fine-grained 只读 token
+3. 仓库已 Private ✅
+4. 用户反馈后如有新需求 → 改代码 push（SSH）→ CI 出包（缓存加速后 3-4 分钟）
+5. 后续优化（可选）：构建成功自动发 GitHub Release；容器构建（Docker/WSL2）彻底告别等待
