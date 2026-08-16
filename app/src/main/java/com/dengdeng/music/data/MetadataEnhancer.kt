@@ -14,10 +14,21 @@ import kotlinx.coroutines.withContext
 object MetadataEnhancer {
 
     private val SPLIT_REGEX = Regex("^\\s*(.+?)\\s*[-–—|/]\\s*(.+?)\\s*$")
-    private const val UNKNOWN = "未知艺术家"
 
     // 内存缓存：songId → 是否已处理（避免并发重复）
     private val processedCache = HashSet<Long>()
+
+    /** 是否未知歌手（中英文各种未知标记） */
+    private fun isUnknownArtist(s: String?): Boolean {
+        val t = s?.trim()?.lowercase() ?: return true
+        if (t.isEmpty()) return true
+        return t in setOf(
+            "未知艺术家", "未知", "佚名",
+            "unknown", "unknown artist", "unknown artists", "unknown singer",
+            "<unknown>", "(unknown)", "unknown-", "-unknown",
+            "?", "null", "none", "n/a", "na", "un"
+        ) || t.contains("unknown artist")
+    }
 
     /**
      * 批量增强曲库歌曲，返回修正后的歌曲列表（未修改的保持原对象）
@@ -58,28 +69,34 @@ object MetadataEnhancer {
         val title = song.title.trim()
         val artist = song.artist.trim()
 
-        // —— 情形 A：歌手未知 ——
-        if (artist.isBlank() || artist == UNKNOWN) {
-            // A1: 歌名里含「歌手 - 歌名」→ 拆分
+        // —— 情形 A：歌手未知（含 unknown 等英文标记） ——
+        if (isUnknownArtist(artist)) {
+            var searchTerm = title
+            // A1: 从歌名里提取歌手（"歌手 - 歌名" 或 "unknown - 歌名"）
             val split = SPLIT_REGEX.find(title)
             if (split != null) {
-                val newArtist = split.groupValues[1].trim()
-                val newTitle = split.groupValues[2].trim()
-                if (newArtist.isNotBlank() && newTitle.isNotBlank()) {
-                    val fixed = song.copy(title = newTitle, artist = newArtist)
-                    persist(context, song.id, newTitle, newArtist)
+                val head = split.groupValues[1].trim()
+                val tail = split.groupValues[2].trim()
+                if (!isUnknownArtist(head) && tail.isNotBlank()) {
+                    // "歌手 - 歌名" → 直接采纳拆分
+                    val fixed = song.copy(title = tail, artist = head)
+                    persist(context, song.id, tail, head)
                     return fixed
+                } else if (tail.isNotBlank()) {
+                    // "unknown - 歌名" → 用后半歌名去联网搜索
+                    searchTerm = tail
                 }
             }
-            // A2: 无分隔符 → 联网按歌名搜歌手
+            // A2: 联网按歌名搜歌手（搜索词优先取拆分出的歌名部分）
             val online = try {
-                OnlineMetadataFetcher.searchSong(title, "", song.durationMs)?.artist
+                OnlineMetadataFetcher.searchSong(searchTerm, "", song.durationMs)?.artist
             } catch (e: Exception) {
                 null
             }
-            if (!online.isNullOrBlank() && online != UNKNOWN) {
-                val fixed = song.copy(artist = online)
-                persist(context, song.id, title, online)
+            if (!isUnknownArtist(online)) {
+                val newTitle = if (searchTerm != title) searchTerm else title
+                val fixed = song.copy(title = newTitle, artist = online!!)
+                persist(context, song.id, newTitle, online)
                 return fixed
             }
             // 都失败：标记已处理避免重复联网

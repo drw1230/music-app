@@ -241,6 +241,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** MediaController（异步连接，可能为 null） */
     private var controller: MediaController? = null
 
+    /** 待恢复的上次播放状态（从 DataStore 读，songs + controller 就绪后恢复） */
+    private var pendingLastPlay: UserLibraryStore.LastPlay? = null
+    private var restoreDone = false
+
     init {
         // 连接后台播放服务
         val context = getApplication<Application>()
@@ -254,6 +258,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             controller?.addListener(playerListener)
             // 启动进度轮询（始终运行：播放/暂停/拖动都实时刷新位置，保证歌词与进度同步）
             updatePositionPolling()
+            // 恢复循环/乱序模式 + 尝试恢复上次播放
+            viewModelScope.launch {
+                runCatching {
+                    controller?.repeatMode = UserLibraryStore.getRepeatMode(context)
+                    controller?.shuffleModeEnabled = UserLibraryStore.getShuffle(context)
+                    pendingLastPlay = UserLibraryStore.getLastPlay(context)
+                }
+                tryRestoreLastPlay()
+            }
         }, MoreExecutors.directExecutor())
 
         // 加载收藏和歌单
@@ -267,6 +280,37 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 searchHistory = UserLibraryStore.searchHistoryFlow(context).first()
             }
         }
+    }
+
+    /** 恢复上次播放：songs + controller 都就绪后调用一次（恢复歌曲、进度、播放状态） */
+    private fun tryRestoreLastPlay() {
+        if (restoreDone) return
+        val ctrl = controller ?: return
+        val lp = pendingLastPlay ?: return
+        if (songs.isEmpty()) return
+        restoreDone = true
+        pendingLastPlay = null
+
+        val index = songs.indexOfFirst { it.id == lp.songId }
+        if (index < 0) return
+        try {
+            val infos = songs.map { song ->
+                PlaybackService.SongInfo(
+                    id = song.id,
+                    title = song.title,
+                    artist = song.artist,
+                    album = song.album,
+                    uri = song.uri.toString(),
+                    albumArtUri = song.albumArtUri?.toString(),
+                    durationMs = song.durationMs
+                )
+            }
+            val items = PlaybackService.buildMediaItems(infos)
+            activeQueue = songs
+            ctrl.setMediaItems(items, index, lp.positionMs.coerceAtLeast(0L))
+            ctrl.prepare()
+            if (lp.isPlaying) ctrl.play()
+        } catch (e: Exception) { }
     }
 
     /** 在线播放（下载完成后播放音源 URL，进入播放界面） */
@@ -314,10 +358,19 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             syncDuration()
             // 记录播放历史（切歌/开始播放时）
             mediaItem?.mediaId?.toLongOrNull()?.let { recordPlay(it) }
+            // 保存上次播放（歌曲 + 初始位置）
+            saveLastPlayState(mediaItem?.mediaId?.toLongOrNull() ?: -1L)
         }
 
         override fun onRepeatModeChanged(repeatMode: Int) {
             this@MusicViewModel.repeatMode = repeatMode
+            val ctx = getApplication<Application>()
+            viewModelScope.launch { runCatching { UserLibraryStore.saveRepeatMode(ctx, repeatMode) } }
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            val ctx = getApplication<Application>()
+            viewModelScope.launch { runCatching { UserLibraryStore.saveShuffle(ctx, shuffleModeEnabled) } }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -334,11 +387,30 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private fun updatePositionPolling() {
         if (positionJob == null) {
             positionJob = viewModelScope.launch {
+                var saveCounter = 0
                 while (isActive) {
                     currentPositionMs = controller?.currentPosition ?: 0L
                     delay(200)
+                    // 每 6 秒保存一次播放进度（恢复进度用，避免频繁写盘）
+                    saveCounter++
+                    if (saveCounter >= 30) {
+                        saveCounter = 0
+                        val songId = controller?.currentMediaItem?.mediaId?.toLongOrNull() ?: -1L
+                        saveLastPlayState(songId)
+                    }
                 }
             }
+        }
+    }
+
+    /** 保存上次播放状态（歌曲 + 进度 + 播放状态） */
+    private fun saveLastPlayState(songId: Long) {
+        if (songId <= 0) return
+        val pos = currentPositionMs
+        val playing = isPlaying
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            runCatching { UserLibraryStore.saveLastPlay(ctx, songId, pos, playing) }
         }
     }
 
@@ -527,6 +599,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
             songs = result
             isLoading = false
+            // 恢复上次播放（songs 已就绪，controller 若已连上则立即恢复）
+            tryRestoreLastPlay()
             // 后台增强元数据（不阻塞显示；已匹配的持久化跳过，不会重复处理）
             MetadataEnhancer.clearCache()
             viewModelScope.launch {

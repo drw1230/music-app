@@ -1,6 +1,7 @@
 package com.dengdeng.music.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -26,6 +27,12 @@ object UserLibraryStore {
     private val KEY_SORT_MODE = intPreferencesKey("sort_mode")              // 排序方式记忆
     private val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history_json") // 搜索历史
     private val KEY_PLAY_HISTORY = stringPreferencesKey("play_history_json") // 播放历史（songId → 次数）
+    private val KEY_LAST_PLAY = stringPreferencesKey("last_play_json")      // 上次播放（歌曲+进度+状态）
+    private val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")          // 循环模式记忆
+    private val KEY_SHUFFLE = booleanPreferencesKey("shuffle_mode")         // 乱序播放记忆
+
+    /** 上次播放信息 */
+    data class LastPlay(val songId: Long, val positionMs: Long, val isPlaying: Boolean)
 
     // ==================== 收藏 ====================
 
@@ -199,6 +206,49 @@ object UserLibraryStore {
         val obj = JSONObject()
         map.forEach { (id, count) -> obj.put(id.toString(), count) }
         return obj.toString()
+    }
+
+    // ==================== 上次播放 + 播放模式记忆 ====================
+
+    /** 上次播放信息（歌曲 ID + 进度 + 播放状态），无记录返回 null */
+    suspend fun getLastPlay(context: Context): LastPlay? =
+        context.dataStore.data.map { prefs ->
+            val raw = prefs[KEY_LAST_PLAY] ?: return@map null
+            try {
+                val obj = JSONObject(raw)
+                LastPlay(
+                    songId = obj.getLong("songId"),
+                    positionMs = obj.optLong("positionMs", 0L),
+                    isPlaying = obj.optBoolean("isPlaying", false)
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }.first()
+
+    /** 保存上次播放信息 */
+    suspend fun saveLastPlay(context: Context, songId: Long, positionMs: Long, isPlaying: Boolean) {
+        val obj = JSONObject()
+            .put("songId", songId)
+            .put("positionMs", positionMs)
+            .put("isPlaying", isPlaying)
+        context.dataStore.edit { prefs -> prefs[KEY_LAST_PLAY] = obj.toString() }
+    }
+
+    /** 上次循环模式（默认全部循环 off → 0） */
+    suspend fun getRepeatMode(context: Context): Int =
+        context.dataStore.data.map { prefs -> prefs[KEY_REPEAT_MODE] ?: 0 }.first()
+
+    suspend fun saveRepeatMode(context: Context, mode: Int) {
+        context.dataStore.edit { prefs -> prefs[KEY_REPEAT_MODE] = mode }
+    }
+
+    /** 上次乱序播放开关 */
+    suspend fun getShuffle(context: Context): Boolean =
+        context.dataStore.data.map { prefs -> prefs[KEY_SHUFFLE] ?: false }.first()
+
+    suspend fun saveShuffle(context: Context, enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[KEY_SHUFFLE] = enabled }
     }
 
     // ==================== 序列化 ====================
