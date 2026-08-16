@@ -260,77 +260,63 @@ fun PlayerScreen(
             }
 
             // ==================== Fly 风格中段 ====================
-            // 大封面（点击进大歌词页）+ 封面下方小歌词（三行，点击进大歌词页）
+            // 大封面（点击进大歌词页）——固定顶部，简单可靠
             Box(
                 modifier = Modifier
-                    .weight(1f)
                     .fillMaxWidth()
+                    .padding(top = 24.dp)
+                    .clickable { showFullLyrics = true },
+                contentAlignment = Alignment.Center
             ) {
-                Column(Modifier.fillMaxSize()) {
-                    // 封面区（内容定高：下移留白 + 封面尺寸；封面与小歌词之间留小间距，整体紧凑无大片留白）
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showFullLyrics = true }
-                    ) {
-                        // 封面下移空间（约 1/4 封面高，视觉下移但不产生大片空白）
-                        Spacer(Modifier.height(48.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(0.86f)
-                                .aspectRatio(1f)
-                                .align(Alignment.CenterHorizontally),
-                            contentAlignment = Alignment.Center
-                        ) {
-                        Crossfade(
-                    targetState = showLyrics,
-                    animationSpec = tween(durationMillis = 300),
-                    label = "cover-lyrics"
-                ) { isLyrics ->
-                    if (isLyrics) {
-                        LyricsView(
-                            viewModel = viewModel,
-                            song = song,
-                            modifier = Modifier.fillMaxSize(),
-                            refreshToken = lyricRefreshToken
-                        )
-                    } else {
-                        // Fly 风格大封面（圆角矩形）
-                        Crossfade(
-                            targetState = song.id,
-                            animationSpec = tween(durationMillis = 400),
-                            label = "album-crossfade"
-                        ) { _ ->
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(1f),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                RotatingAlbumArt(
-                                    song = song,
-                                    isPlaying = viewModel.isPlaying,
-                                    coverRefreshToken = coverRefreshToken
-                                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.8f)
+                        .aspectRatio(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Crossfade(
+                        targetState = showLyrics,
+                        animationSpec = tween(durationMillis = 300),
+                        label = "cover-lyrics"
+                    ) { isLyrics ->
+                        if (isLyrics) {
+                            LyricsView(
+                                viewModel = viewModel,
+                                song = song,
+                                modifier = Modifier.fillMaxSize(),
+                                refreshToken = lyricRefreshToken
+                            )
+                        } else {
+                            Crossfade(
+                                targetState = song.id,
+                                animationSpec = tween(durationMillis = 400),
+                                label = "album-crossfade"
+                            ) { _ ->
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(1f),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    RotatingAlbumArt(
+                                        song = song,
+                                        isPlaying = viewModel.isPlaying,
+                                        coverRefreshToken = coverRefreshToken
+                                    )
+                                }
                             }
                         }
                     }
                 }
-                        }
-                    }
-                    // 小歌词（封面正下方，间距由封面区剩余空间撑开；点击进大歌词页）
-                    MiniLyricsView(
-                        song = song,
-                        viewModel = viewModel,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 24.dp)
-                            .clickable { showFullLyrics = true }
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    // 剩余空间推到底部控制区：小歌词位于封面与歌名之间，不留大片空白
-                    Spacer(Modifier.weight(1f))
-                }
             }
+
+            // 小歌词（5 行：前2/前1/当前/后1/后2；点击进大歌词页）
+            MiniLyricsView(
+                song = song,
+                viewModel = viewModel,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+                    .clickable { showFullLyrics = true }
+            )
 
             Spacer(Modifier.weight(1f))
 
@@ -1003,20 +989,20 @@ private fun MiniLyricsView(
         when {
             !loaded -> Text(
                 "歌词加载中…",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.5f)
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             )
             lyrics.isEmpty() -> Text(
-                "暂无歌词，点击查看",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.5f)
+                "暂无歌词 · 点击查看",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             )
             else -> {
                 // 前二句（更暗）
                 Text(
                     lyrics.getOrNull(currentIndex - 2)?.text ?: " ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.3f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1025,7 +1011,7 @@ private fun MiniLyricsView(
                 Text(
                     lyrics.getOrNull(currentIndex - 1)?.text ?: " ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.5f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1035,7 +1021,7 @@ private fun MiniLyricsView(
                     lyrics.getOrNull(currentIndex)?.text ?: " ",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1044,7 +1030,7 @@ private fun MiniLyricsView(
                 Text(
                     lyrics.getOrNull(currentIndex + 1)?.text ?: " ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.5f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1053,7 +1039,7 @@ private fun MiniLyricsView(
                 Text(
                     lyrics.getOrNull(currentIndex + 2)?.text ?: " ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.3f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
