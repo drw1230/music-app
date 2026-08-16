@@ -32,12 +32,13 @@ import java.util.Locale
 /**
  * 每日电台界面：双榜热歌（网易云 + QQ）→ 每日推荐
  * - 播放 <10s 切走的歌自动降权（ViewModel.skipSongs 过滤）
- * - 支持单曲试听（迷你条）、下载、一键播放电台（在线流队列）
+ * - 进入界面自动开始播放；支持刷新电台、单曲进全屏播放、下载
  */
 @Composable
 fun OnlineRadioScreen(
     viewModel: MusicViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onPlayFull: (OnlineSong) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -49,27 +50,76 @@ fun OnlineRadioScreen(
     var radioState by remember { mutableStateOf<String?>(null) }
     // 单曲下载状态：key=title|artist → 文案
     var downloadState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // 是否已自动播放过（进入界面自动播一次）
+    var autoPlayed by remember { mutableStateOf(false) }
 
     // 日期
     val today = remember {
         SimpleDateFormat("M月d日", Locale.getDefault()).format(Date())
     }
 
-    LaunchedEffect(Unit) {
-        loading = true
-        error = false
-        val hot = OnlineMetadataFetcher.fetchHotSongs(20)
-        // 过滤用户 10 秒内切走的歌（负反馈）
-        val skip = viewModel.skipSongs
-        songs = if (skip.isEmpty()) hot else hot.filterNot {
-            "${it.title}|${it.artist}" in skip
+    /** 加载电台（刷新时 force 重新拉取） */
+    fun loadRadio(force: Boolean) {
+        scope.launch {
+            loading = true
+            error = false
+            val hot = OnlineMetadataFetcher.fetchHotSongs(20)
+            val skip = viewModel.skipSongs
+            songs = if (skip.isEmpty()) hot else hot.filterNot {
+                "${it.title}|${it.artist}" in skip
+            }
+            loading = false
+            if (songs.isEmpty()) error = true
         }
-        loading = false
-        if (songs.isEmpty()) error = true
+    }
+
+    /** 播放电台（逐首解析 URL → 在线流队列） */
+    fun playRadio() {
+        if (songs.isEmpty() || radioState != null) return
+        scope.launch {
+            val targets = songs
+            radioState = "正在准备电台 0/${targets.size}…"
+            val queue = mutableListOf<Song>()
+            for ((i, s) in targets.withIndex()) {
+                val url = OnlineMetadataFetcher.resolveOnlineUrl(s)
+                if (url != null) {
+                    queue.add(
+                        Song(
+                            id = -1L,
+                            title = s.title,
+                            artist = s.artist,
+                            album = "每日电台",
+                            durationMs = s.durationMs,
+                            uri = android.net.Uri.parse(url),
+                            albumArtUri = s.artUrl?.let { android.net.Uri.parse(it) }
+                        )
+                    )
+                }
+                radioState = "正在准备电台 ${i + 1}/${targets.size}…"
+            }
+            radioState = null
+            if (queue.isNotEmpty()) {
+                viewModel.playOnlineQueue(queue)
+            } else {
+                radioState = "暂无可用音源"
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        loadRadio(false)
+    }
+
+    // 进入界面后自动开始播放（点击"每日电台"按钮即直接播放）
+    LaunchedEffect(songs.isNotEmpty(), autoPlayed) {
+        if (songs.isNotEmpty() && !autoPlayed) {
+            autoPlayed = true
+            playRadio()
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
-        // 顶部栏：返回 + 电台标题
+        // 顶部栏：返回 + 电台标题 + 刷新
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -98,6 +148,21 @@ fun OnlineRadioScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // 刷新电台
+            Text(
+                text = if (loading) "加载中…" else "刷新电台",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                    .clickable(enabled = !loading) {
+                        autoPlayed = true   // 刷新不自动播放
+                        loadRadio(true)
+                    }
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            )
+            Spacer(Modifier.width(8.dp))
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
@@ -125,37 +190,7 @@ fun OnlineRadioScreen(
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                        .clickable(enabled = radioState == null) {
-                            // 一键播放电台：逐首解析 URL → 在线流队列
-                            scope.launch {
-                                val targets = songs
-                                radioState = "正在准备电台 0/${targets.size}…"
-                                val queue = mutableListOf<Song>()
-                                for ((i, s) in targets.withIndex()) {
-                                    val url = OnlineMetadataFetcher.resolveOnlineUrl(s)
-                                    if (url != null) {
-                                        queue.add(
-                                            Song(
-                                                id = -1L,
-                                                title = s.title,
-                                                artist = s.artist,
-                                                album = "每日电台",
-                                                durationMs = s.durationMs,
-                                                uri = android.net.Uri.parse(url),
-                                                albumArtUri = s.artUrl?.let { android.net.Uri.parse(it) }
-                                            )
-                                        )
-                                    }
-                                    radioState = "正在准备电台 ${i + 1}/${targets.size}…"
-                                }
-                                radioState = null
-                                if (queue.isNotEmpty()) {
-                                    viewModel.playOnlineQueue(queue)
-                                } else {
-                                    radioState = "暂无可用音源"
-                                }
-                            }
-                        }
+                        .clickable(enabled = radioState == null) { playRadio() }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -168,13 +203,13 @@ fun OnlineRadioScreen(
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(
-                            radioState ?: "播放今日电台",
+                            radioState ?: "重新播放今日电台",
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            "${songs.size} 首 · 按你的口味推荐（跳过太快的歌会自动减少）",
+                            "${songs.size} 首 · 跳过太快的歌会自动减少推荐",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -187,11 +222,12 @@ fun OnlineRadioScreen(
                 ) {
                     items(songs, key = { "${it.platform}|${it.id}" }) { song ->
                         OnlineSongRow(song = song, onClick = {
-                            // 点击试听（迷你条播放）
+                            // 点击歌曲 → 播放并进入全屏播放界面
                             scope.launch {
                                 val url = OnlineMetadataFetcher.resolveOnlineUrl(song)
                                 if (url != null) {
                                     viewModel.playOnline(song.title, song.artist, url, song.artUrl, song.durationMs)
+                                    onPlayFull(song)
                                 }
                             }
                         })

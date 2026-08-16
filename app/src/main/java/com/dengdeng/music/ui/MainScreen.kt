@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RemoveCircleOutline
@@ -121,18 +122,6 @@ fun MainScreen(
             TopAppBar(
                 title = { Text("DDmusic") },
                 actions = {
-                    // 每日电台入口（标题旁，主题色按钮）
-                    Text(
-                        text = "电台",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                            .clickable { showRadio = true }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
                     // 右上角更多菜单
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
@@ -210,10 +199,7 @@ fun MainScreen(
             if (viewModel.nowPlayingSong() != null) {
                     MiniPlayerBar(
                         viewModel,
-                        onClick = {
-                            // 在线试听不进全屏播放界面（仅迷你条试听）
-                            if (viewModel.onlineQueue.isEmpty()) showPlayer = true
-                        }
+                        onClick = { showPlayer = true }
                     )
             }
         }
@@ -225,7 +211,8 @@ fun MainScreen(
                 Box(Modifier.padding(padding)) {
                     OnlineRadioScreen(
                         viewModel = viewModel,
-                        onBack = { showRadio = false }
+                        onBack = { showRadio = false },
+                        onPlayFull = { showPlayer = true }
                     )
                 }
             }
@@ -342,7 +329,8 @@ fun MainScreen(
                             onOnlineSearch = { q ->
                                 viewModel.addSearchHistory(q)
                                 onlineSearchQuery = q
-                            }
+                            },
+                            onRadio = { showRadio = true }
                         )
                     }
                 }
@@ -507,7 +495,8 @@ private fun SongList(
     viewModel: MusicViewModel,
     onAddToPlaylist: (Long) -> Unit,
     onDeleteSongs: (List<android.net.Uri>) -> Unit,
-    onOnlineSearch: (String) -> Unit
+    onOnlineSearch: (String) -> Unit,
+    onRadio: () -> Unit
 ) {
     val songs = viewModel.filteredSongs
     val totalDuration = songs.sumOf { it.durationMs }
@@ -685,7 +674,8 @@ private fun SongList(
                 songCount = songs.size,
                 totalMinutes = totalMinutes,
                 onPlayAll = { viewModel.playSong(0) },
-                onShuffleAll = { viewModel.shufflePlay() }
+                onShuffleAll = { viewModel.shufflePlay() },
+                onRadio = onRadio
             )
         }
         if (songs.isEmpty() && query.isNotBlank()) {
@@ -1195,7 +1185,8 @@ private fun LibraryHeader(
     songCount: Int,
     totalMinutes: Long,
     onPlayAll: () -> Unit,
-    onShuffleAll: () -> Unit
+    onShuffleAll: () -> Unit,
+    onRadio: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1215,24 +1206,36 @@ private fun LibraryHeader(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = onPlayAll,
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("全部播放")
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("全部播放", style = MaterialTheme.typography.labelLarge)
             }
             OutlinedButton(
                 onClick = onShuffleAll,
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
-                Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("随机播放")
+                Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("随机播放", style = MaterialTheme.typography.labelLarge)
+            }
+            OutlinedButton(
+                onClick = onRadio,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp)
+            ) {
+                Icon(Icons.Default.Radio, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("每日电台", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
         }
         Spacer(Modifier.height(16.dp))

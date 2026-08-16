@@ -87,7 +87,7 @@ fun PlayerScreen(
     viewModel: MusicViewModel,
     onClose: () -> Unit
 ) {
-    val song = viewModel.currentSong()
+    val song = viewModel.nowPlayingSong()
     if (song == null) {
         LaunchedEffect(Unit) { onClose() }
         return
@@ -388,12 +388,14 @@ fun PlayerScreen(
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                IconButton(onClick = { viewModel.toggleFavorite(song.id) }) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = if (isFavorite) "取消收藏" else "收藏",
-                        tint = if (isFavorite) Color(0xFFFF5A79) else Color.White.copy(alpha = 0.7f)
-                    )
+                if (!viewModel.isOnlinePlaying) {
+                    IconButton(onClick = { viewModel.toggleFavorite(song.id) }) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                            tint = if (isFavorite) Color(0xFFFF5A79) else Color.White.copy(alpha = 0.7f)
+                        )
+                    }
                 }
             }
 
@@ -474,22 +476,35 @@ fun PlayerScreen(
             )
         }
 
-        // 在线下载：搜索音源 → 下载 → 反馈
+        // 在线下载：自动选全网最高音质（3 平台）→ 下载 → 反馈
         downloadState?.let { status ->
             val dlContext = LocalContext.current
             LaunchedEffect(downloadState) {
                 if (status == "正在搜索音源…") {
-                    val candidates = OnlineDownloader.searchCandidates(song.title, song.artist, song.durationMs)
-                    val pick = candidates.firstOrNull { !it.audioUrl.isNullOrBlank() }
-                    if (pick == null) {
-                        downloadState = "未找到可下载的音源（网易云/QQ 均无权限）"
+                    // 在线歌直接下载（uri 已是音频 URL）；本地歌构造 OnlineSong 按歌名查 3 平台音源
+                    val url = if (viewModel.isOnlinePlaying) {
+                        song.uri.toString()
                     } else {
-                        downloadState = "正在下载（${pick.source}）…"
+                        val os = com.dengdeng.music.data.OnlineMetadataFetcher.OnlineSong(
+                            platform = "",
+                            id = "",
+                            title = song.title,
+                            artist = song.artist,
+                            album = song.album,
+                            artUrl = song.albumArtUri?.toString(),
+                            durationMs = song.durationMs
+                        )
+                        OnlineMetadataFetcher.resolveOnlineUrl(os)
+                    }
+                    if (url.isNullOrBlank()) {
+                        downloadState = "未找到可下载的音源（各平台均无权限）"
+                    } else {
+                        downloadState = "正在下载（最高音质）…"
                         val ok = OnlineDownloader.downloadToMusicLibrary(
-                            dlContext, pick.audioUrl!!, pick.title, pick.artist
+                            dlContext, url, song.title, song.artist
                         )
                         downloadState = if (ok) {
-                            "下载完成：${pick.title} - ${pick.artist}\n已保存到 音乐/DDmusic/"
+                            "下载完成：${song.title} - ${song.artist}\n已保存到 音乐/DDmusic/"
                         } else {
                             "下载失败，请检查网络后重试"
                         }
