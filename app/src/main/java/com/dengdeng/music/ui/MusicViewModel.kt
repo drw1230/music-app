@@ -755,17 +755,39 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun updateSongTags(song: Song, title: String, artist: String, album: String) {
         viewModelScope.launch {
             val ctx = getApplication<Application>()
-            val ok = withContext(Dispatchers.IO) {
-                MusicRepository.updateSongMetadata(ctx, song.uri, title, artist, album)
+            // 1) 尽力写 MediaStore（Android 10+ 直接 update TITLE/ARTIST 常失败或返回 0，
+            //    不能以此判断"保存成功"→ 失败仅记录，不阻塞下面的内存/持久化更新）
+            if (song.id > 0) {
+                withContext(Dispatchers.IO) {
+                    runCatching { MusicRepository.updateSongMetadata(ctx, song.uri, title, artist, album) }
+                }
             }
-            if (ok) {
-                songs = songs.map {
-                    if (it.id == song.id) it.copy(title = title, artist = artist, album = album) else it
-                }
-                // 持久化覆盖，防止下次扫描被原始标签回滚
+            // 2) 更新曲库列表 + 播放队列内存（播放页/迷你条用 activeQueue 显示 → 立即生效）
+            val updated = song.copy(title = title, artist = artist, album = album)
+            songs = songs.map { if (it.id == song.id) updated else it }
+            activeQueue = activeQueue.map { if (it.id == song.id) updated else it }
+            onlineQueue = onlineQueue.map { if (it.id == song.id) updated else it }
+            // 3) 同步当前播放 MediaItem 元数据（通知栏/系统媒体中心显示新标题）
+            if (song.id > 0) {
                 runCatching {
-                    UserLibraryStore.saveMetadataOverride(ctx, song.id, title, artist)
+                    val item = MediaItem.Builder()
+                        .setMediaId(updated.id.toString())
+                        .setUri(updated.uri)
+                        .setMediaMetadata(
+                            androidx.media3.common.MediaMetadata.Builder()
+                                .setTitle(updated.title)
+                                .setArtist(updated.artist)
+                                .setAlbumTitle(updated.album)
+                                .setArtworkUri(updated.albumArtUri)
+                                .build()
+                        )
+                        .build()
+                    controller?.replaceMediaItem(currentIndex, item)
                 }
+            }
+            // 4) 持久化覆盖（下次扫描不被原始 ID3 标签回滚）
+            if (song.id > 0) {
+                runCatching { UserLibraryStore.saveMetadataOverride(ctx, song.id, title, artist) }
             }
         }
     }
