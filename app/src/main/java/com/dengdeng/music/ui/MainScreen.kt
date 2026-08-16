@@ -200,8 +200,8 @@ fun MainScreen(
             if (viewModel.nowPlayingSong() != null) {
                     MiniPlayerBar(
                         viewModel,
-                        // 在线试听统一用迷你条控制，不进全屏播放界面
-                        onClick = { if (!viewModel.isOnlinePlaying) showPlayer = true }
+                        // 统一用迷你条控制试听；点击迷你条（本地/在线歌均可）进入全屏播放界面操作
+                        onClick = { showPlayer = true }
                     )
             }
         }
