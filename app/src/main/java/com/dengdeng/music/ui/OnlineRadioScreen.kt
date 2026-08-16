@@ -54,28 +54,6 @@ fun OnlineRadioScreen(
     // 电台模式：false=探索版（平台热榜为主） true=熟悉版（常听歌手热歌为主）
     var familiarMode by remember { mutableStateOf(false) }
 
-    /** 加载电台（force=强制重新拉取；autoPlay=加载完成后自动播放——切模式用） */
-    fun loadRadio(force: Boolean, autoPlay: Boolean = false) {
-        scope.launch {
-            loading = true
-            error = false
-            val hot = if (familiarMode) {
-                // 熟悉版：按我最常听的歌手取平台热歌
-                OnlineMetadataFetcher.fetchFamiliarSongs(viewModel.topArtists(5))
-            } else {
-                // 探索版：网易云 + QQ 双榜热歌
-                OnlineMetadataFetcher.fetchHotSongs(20)
-            }
-            val skip = viewModel.skipSongs
-            songs = if (skip.isEmpty()) hot else hot.filterNot {
-                "${it.title}|${it.artist}" in skip
-            }
-            loading = false
-            if (songs.isEmpty()) error = true
-            else if (autoPlay) playRadio()   // 切模式后直接播新模式
-        }
-    }
-
     /** 播放电台（并行解析 URL → 在线流队列，几十首秒级完成） */
     fun playRadio() {
         if (songs.isEmpty() || radioState != null) return
@@ -105,6 +83,28 @@ fun OnlineRadioScreen(
             } else {
                 radioState = "暂无可用音源"
             }
+        }
+    }
+
+    /** 加载电台（force=强制重新拉取；autoPlay=加载完成后自动播放——切模式用） */
+    fun loadRadio(force: Boolean, autoPlay: Boolean = false) {
+        scope.launch {
+            loading = true
+            error = false
+            val hot = if (familiarMode) {
+                // 熟悉版：按我最常听的歌手取平台热歌
+                OnlineMetadataFetcher.fetchFamiliarSongs(viewModel.topArtists(5))
+            } else {
+                // 探索版：网易云 + QQ 双榜热歌
+                OnlineMetadataFetcher.fetchHotSongs(20)
+            }
+            val skip = viewModel.skipSongs
+            songs = if (skip.isEmpty()) hot else hot.filterNot {
+                "${it.title}|${it.artist}" in skip
+            }
+            loading = false
+            if (songs.isEmpty()) error = true
+            else if (autoPlay) playRadio()   // 切模式后直接播新模式
         }
     }
 
