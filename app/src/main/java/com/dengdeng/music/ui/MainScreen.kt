@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
@@ -199,7 +200,8 @@ fun MainScreen(
             if (viewModel.nowPlayingSong() != null) {
                     MiniPlayerBar(
                         viewModel,
-                        onClick = { showPlayer = true }
+                        // 在线试听统一用迷你条控制，不进全屏播放界面
+                        onClick = { if (!viewModel.isOnlinePlaying) showPlayer = true }
                     )
             }
         }
@@ -211,8 +213,7 @@ fun MainScreen(
                 Box(Modifier.padding(padding)) {
                     OnlineRadioScreen(
                         viewModel = viewModel,
-                        onBack = { showRadio = false },
-                        onPlayFull = { showPlayer = true }
+                        onBack = { showRadio = false }
                     )
                 }
             }
@@ -504,6 +505,8 @@ private fun SongList(
 
     // 搜索框状态
     var query by remember { mutableStateOf("") }
+    // 搜索框是否聚焦（聚焦且为空时在搜索框下方显示搜索历史，不占曲库位置）
+    var searchFocused by remember { mutableStateOf(false) }
     // 联想面板开关（点击联想项后关闭，继续输入重新打开）
     var suggestOpen by remember { mutableStateOf(true) }
     // 联想建议（去重歌名，前缀优先）
@@ -536,10 +539,11 @@ private fun SongList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .onFocusChanged { searchFocused = it.isFocused }
             )
         }
-        // 搜索历史区（搜索框为空时显示，点击可再次搜索）
-        if (query.isBlank() && viewModel.searchHistory.isNotEmpty()) {
+        // 搜索历史区（点击搜索框获得焦点时，在搜索框下方显示；不搜索时不占曲库位置）
+        if (searchFocused && query.isBlank() && viewModel.searchHistory.isNotEmpty()) {
             item {
                 val allHistory = viewModel.searchHistory
                 // 默认只显示一排（前 5 个），点击"历史 N"展开全部

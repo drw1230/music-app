@@ -35,13 +35,12 @@ import java.util.Locale
 /**
  * 每日电台界面：双榜热歌（网易云 + QQ）→ 每日推荐
  * - 播放 <10s 切走的歌自动降权（ViewModel.skipSongs 过滤）
- * - 进入界面自动开始播放；支持刷新电台、单曲进全屏播放、下载
+ * - 进入界面自动开始播放；支持刷新电台、单曲试听（曲库迷你条控制）、下载
  */
 @Composable
 fun OnlineRadioScreen(
     viewModel: MusicViewModel,
-    onBack: () -> Unit,
-    onPlayFull: (OnlineSong) -> Unit = {}
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -233,12 +232,11 @@ fun OnlineRadioScreen(
                 ) {
                     items(songs, key = { "${it.platform}|${it.id}" }) { song ->
                         OnlineSongRow(song = song, onClick = {
-                            // 点击歌曲 → 播放并进入全屏播放界面
+                            // 点击歌曲 → 在线试听（统一用曲库底部迷你条控制，不进全屏播放界面）
                             scope.launch {
                                 val url = OnlineMetadataFetcher.resolveOnlineUrl(song)
                                 if (url != null) {
                                     viewModel.playOnline(song.title, song.artist, url, song.artUrl, song.durationMs)
-                                    onPlayFull(song)
                                 }
                             }
                         })
