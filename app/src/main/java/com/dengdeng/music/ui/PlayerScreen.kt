@@ -58,6 +58,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -98,6 +99,8 @@ fun PlayerScreen(
     var showCoverPicker by remember { mutableStateOf(false) }
     var coverRefreshToken by remember { mutableStateOf(0) }
     var lyricRefreshToken by remember { mutableStateOf(0) }
+    var showLyricAdjust by remember { mutableStateOf(false) }
+    var showEditTag by remember { mutableStateOf(false) }
     var coverCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
     // 在线下载状态（null=不显示弹窗）
     var downloadState by remember { mutableStateOf<String?>(null) }
@@ -289,6 +292,20 @@ fun PlayerScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = { Text("歌词微调") },
+                            onClick = {
+                                showSongMenu = false
+                                showLyricAdjust = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("编辑标签") },
+                            onClick = {
+                                showSongMenu = false
+                                showEditTag = true
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("下载歌曲") },
                             onClick = {
                                 showSongMenu = false
@@ -415,6 +432,31 @@ fun PlayerScreen(
             )
         }
 
+        // 歌词微调弹窗
+        if (showLyricAdjust) {
+            LyricAdjustDialog(
+                song = song,
+                offsetMs = viewModel.lyricOffset(song.id),
+                onApply = { newOffset ->
+                    viewModel.setLyricOffset(song.id, newOffset)
+                    showLyricAdjust = false
+                },
+                onDismiss = { showLyricAdjust = false }
+            )
+        }
+
+        // 编辑标签弹窗
+        if (showEditTag) {
+            EditTagDialog(
+                song = song,
+                onSave = { title, artist, album ->
+                    viewModel.updateSongTags(song, title, artist, album)
+                    showEditTag = false
+                },
+                onDismiss = { showEditTag = false }
+            )
+        }
+
         // 在线下载：搜索音源 → 下载 → 反馈
         downloadState?.let { status ->
             val dlContext = LocalContext.current
@@ -503,6 +545,107 @@ private fun CoverPickerDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
+}
+
+/** 歌词微调弹窗：整体偏移歌词时间线（±步进调节，保存后永久生效） */
+@Composable
+private fun LyricAdjustDialog(
+    song: Song,
+    offsetMs: Long,
+    onApply: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var current by remember(song.id, offsetMs) { mutableStateOf(offsetMs) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("歌词微调") },
+        text = {
+            Column {
+                Text(
+                    "当前偏移：${formatLyricOffset(current)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { current -= 1000 }) { Text("-1s") }
+                    TextButton(onClick = { current -= 500 }) { Text("-0.5s") }
+                    TextButton(onClick = { current = 0 }) { Text("重置") }
+                    TextButton(onClick = { current += 500 }) { Text("+0.5s") }
+                    TextButton(onClick = { current += 1000 }) { Text("+1s") }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "偏移 +：歌词提前显示\n偏移 -：歌词延后显示\n（云端歌词与本地音频版本有差异时用它对齐）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onApply(current) }) { Text("应用") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 编辑标签弹窗：修改歌名/歌手/专辑（写 MediaStore + 持久化） */
+@Composable
+private fun EditTagDialog(
+    song: Song,
+    onSave: (String, String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var title by remember(song.id) { mutableStateOf(song.title) }
+    var artist by remember(song.id) { mutableStateOf(song.artist) }
+    var album by remember(song.id) { mutableStateOf(song.album) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("编辑标签") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("歌名") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = artist,
+                    onValueChange = { artist = it },
+                    label = { Text("歌手") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = album,
+                    onValueChange = { album = it },
+                    label = { Text("专辑") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(title.trim(), artist.trim(), album.trim()) }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 歌词偏移格式化（毫秒 → +0.5s / -1.0s） */
+private fun formatLyricOffset(ms: Long): String {
+    val sec = ms / 1000.0
+    return if (ms >= 0) "+%.1fs".format(sec) else "%.1fs".format(sec)
 }
 
 /** 旋转封面：播放时匀速旋转 + 底部光晕，暂停时静止 */
@@ -620,12 +763,13 @@ private fun LyricsView(
         return
     }
 
-    // 当前播放进度
+    // 当前播放进度（减去歌词偏移，等效于歌词时间线平移）
     val positionMs = viewModel.currentPositionMs
+    val lyricAdjustMs = viewModel.lyricOffset(song.id)
 
-    // 计算当前行索引：最后一行 timeMs <= 当前进度
-    val currentIndex = remember(lyrics, positionMs) {
-        val idx = lyrics.indexOfLast { it.timeMs <= positionMs }
+    // 计算当前行索引：最后一行 timeMs <= 当前进度（含微调偏移）
+    val currentIndex = remember(lyrics, positionMs, lyricAdjustMs) {
+        val idx = lyrics.indexOfLast { it.timeMs <= positionMs - lyricAdjustMs }
         if (idx < 0) 0 else idx
     }
 
@@ -663,7 +807,7 @@ private fun LyricsView(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        viewModel.seekTo(line.timeMs)
+                        viewModel.seekAndPlay(line.timeMs + lyricAdjustMs)
                     },
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )

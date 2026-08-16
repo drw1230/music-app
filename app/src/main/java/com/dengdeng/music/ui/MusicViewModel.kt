@@ -272,13 +272,33 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // 加载收藏和歌单
         loadFavorites()
         loadPlaylists()
-        // 恢复记忆：排序方式 + 播放历史 + 搜索历史（跨重启保持）
+        // 恢复记忆：排序方式 + 播放历史 + 搜索历史 + 歌词偏移（跨重启保持）
         viewModelScope.launch {
             runCatching {
                 sortMode = UserLibraryStore.getSortMode(context)
                 playHistory = UserLibraryStore.playHistoryFlow(context).first()
                 searchHistory = UserLibraryStore.searchHistoryFlow(context).first()
+                lyricOffsets = UserLibraryStore.lyricOffsetsFlow(context).first()
             }
+        }
+    }
+
+    // ==================== 歌词微调 ====================
+
+    /** 歌词偏移映射（songId → 偏移毫秒，正=歌词提前显示） */
+    var lyricOffsets by mutableStateOf<Map<Long, Long>>(emptyMap())
+        private set
+
+    /** 某首歌的歌词偏移（毫秒） */
+    fun lyricOffset(songId: Long): Long = lyricOffsets[songId] ?: 0L
+
+    /** 设置歌词偏移（0 = 重置） */
+    fun setLyricOffset(songId: Long, offsetMs: Long) {
+        lyricOffsets = lyricOffsets + (songId to offsetMs)
+        if (offsetMs == 0L) lyricOffsets = lyricOffsets - songId
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            runCatching { UserLibraryStore.saveLyricOffset(ctx, songId, offsetMs) }
         }
     }
 
@@ -342,6 +362,25 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (enhanced != null) {
                 songs = songs.map { if (it.id == song.id) enhanced else it }
+            }
+        }
+    }
+
+    /** 编辑歌曲标签（歌名/歌手/专辑）：写 MediaStore + 更新内存 + 持久化覆盖防回滚 */
+    fun updateSongTags(song: Song, title: String, artist: String, album: String) {
+        viewModelScope.launch {
+            val ctx = getApplication<Application>()
+            val ok = withContext(Dispatchers.IO) {
+                MusicRepository.updateSongMetadata(ctx, song.uri, title, artist, album)
+            }
+            if (ok) {
+                songs = songs.map {
+                    if (it.id == song.id) it.copy(title = title, artist = artist, album = album) else it
+                }
+                // 持久化覆盖，防止下次扫描被原始标签回滚
+                runCatching {
+                    UserLibraryStore.saveMetadataOverride(ctx, song.id, title, artist)
+                }
             }
         }
     }

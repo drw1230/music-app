@@ -49,6 +49,39 @@ fun OnlineSearchScreen(
     var selectedSong by remember { mutableStateOf<OnlineSong?>(null) }
     // 下载状态：key=平台|品质 → 状态文案
     var downloadState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // 批量下载状态（null=未开始）
+    var batchState by remember(query) { mutableStateOf<String?>(null) }
+
+    /** 批量下载：搜索结果前 10 首，自动选全网最高音质 */
+    fun startBatchDownload() {
+        if (batchState?.contains("下载中") == true) return
+        val targets = results.take(10)
+        if (targets.isEmpty()) return
+        scope.launch {
+            val qualityOrder = mapOf("无损" to 0, "高品" to 1, "标准" to 2)
+            var done = 0
+            var ok = 0
+            batchState = "批量下载中 0/${targets.size}…"
+            for (song in targets) {
+                try {
+                    val sources = OnlineMetadataFetcher.fetchAudioSources(song)
+                    val best = sources
+                        .filter { it.url != null }
+                        .minByOrNull { qualityOrder[it.quality] ?: 3 }
+                    if (best != null) {
+                        val success = OnlineDownloader.downloadToMusicLibrary(
+                            context, best.url!!, song.title, song.artist, best.format
+                        )
+                        if (success) ok++
+                    }
+                } catch (e: Exception) { }
+                done++
+                batchState = "批量下载中 $done/${targets.size}…"
+            }
+            batchState = "已下载 $ok 首"
+            if (ok > 0) onDownloaded()
+        }
+    }
 
     LaunchedEffect(query) {
         loading = true
@@ -82,6 +115,18 @@ fun OnlineSearchScreen(
                 )
             }
             if (!loading && results.isNotEmpty()) {
+                // 批量下载按钮（最高音质优先，前 10 首）
+                Text(
+                    batchState ?: "批量下载",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (batchState == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = if (batchState == null) 0.12f else 0.06f))
+                        .clickable(enabled = batchState?.contains("下载中") != true) { startBatchDownload() }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                )
+                Spacer(Modifier.width(10.dp))
                 // 来源统计
                 val platforms = results.map { it.platform }.distinct()
                 Text(
@@ -368,7 +413,7 @@ private fun OnlineSourceSheet(
     )
 }
 
-/** 音源条目行：平台 + 品质/格式 + 码率/大小 + 状态按钮（下载 → 播放） */
+/** 音源条目行：整行点击=在线试听/播放，右侧按钮=下载 */
 @Composable
 private fun AudioSourceRow(
     source: AudioSource,
@@ -381,8 +426,9 @@ private fun AudioSourceRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-            .clickable(enabled = source.url != null && (state == null || state == "已下载 ✓")) {
-                if (state == "已下载 ✓") onPlay() else onClick()
+            .clickable(enabled = source.url != null) {
+                // 整行点击 = 在线试听/播放（url 可用时）
+                onPlay()
             }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -438,9 +484,20 @@ private fun AudioSourceRow(
             state != null -> Text(state, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             source.url == null -> Text("VIP 受限", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE6A23C))
             else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Download, contentDescription = "下载", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(2.dp))
-                Text("下载", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                // 可试听（整行点击）
+                Icon(Icons.Default.PlayArrow, contentDescription = "试听", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                // 下载按钮（独立点击）
+                Text(
+                    "下载",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .clickable { onClick() }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                )
             }
         }
     }

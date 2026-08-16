@@ -130,4 +130,22 @@ object MusicRepository {
         }
         return songs
     }
+
+    /**
+     * 更新歌曲标签（歌名/歌手/专辑）——写 MediaStore 元数据
+     * Android 10+ 允许更新自有媒体的 TITLE/ARTIST/ALBUM 列
+     * @return 是否成功
+     */
+    fun updateSongMetadata(context: Context, uri: Uri, title: String, artist: String, album: String): Boolean {
+        return try {
+            val values = android.content.ContentValues().apply {
+                put(MediaStore.Audio.Media.TITLE, title)
+                put(MediaStore.Audio.Media.ARTIST, artist)
+                put(MediaStore.Audio.Media.ALBUM, album)
+            }
+            context.contentResolver.update(uri, values, null, null) > 0
+        } catch (e: Exception) {
+            false
+        }
+    }
 }

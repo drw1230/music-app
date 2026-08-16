@@ -30,6 +30,7 @@ object UserLibraryStore {
     private val KEY_LAST_PLAY = stringPreferencesKey("last_play_json")      // 上次播放（歌曲+进度+状态）
     private val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")          // 循环模式记忆
     private val KEY_SHUFFLE = booleanPreferencesKey("shuffle_mode")         // 乱序播放记忆
+    private val KEY_LYRIC_OFFSET = stringPreferencesKey("lyric_offset_json") // 歌词微调偏移（songId → ms）
 
     /** 上次播放信息 */
     data class LastPlay(val songId: Long, val positionMs: Long, val isPlaying: Boolean)
@@ -249,6 +250,33 @@ object UserLibraryStore {
 
     suspend fun saveShuffle(context: Context, enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[KEY_SHUFFLE] = enabled }
+    }
+
+    // ==================== 歌词微调偏移 ====================
+
+    /** 全部歌词偏移（songId → 偏移毫秒，正=歌词提前/负=歌词延后） */
+    fun lyricOffsetsFlow(context: Context): Flow<Map<Long, Long>> =
+        context.dataStore.data.map { prefs ->
+            val raw = prefs[KEY_LYRIC_OFFSET] ?: "{}"
+            try {
+                val obj = JSONObject(raw)
+                val map = mutableMapOf<Long, Long>()
+                obj.keys().forEach { key ->
+                    map[key.toLongOrNull() ?: return@forEach] = obj.optLong(key, 0L)
+                }
+                map
+            } catch (e: Exception) {
+                emptyMap()
+            }
+        }
+
+    /** 设置某首歌的歌词偏移 */
+    suspend fun saveLyricOffset(context: Context, songId: Long, offsetMs: Long) {
+        val map = lyricOffsetsFlow(context).first().toMutableMap()
+        if (offsetMs == 0L) map.remove(songId) else map[songId] = offsetMs
+        val obj = JSONObject()
+        map.forEach { (id, off) -> obj.put(id.toString(), off) }
+        context.dataStore.edit { prefs -> prefs[KEY_LYRIC_OFFSET] = obj.toString() }
     }
 
     // ==================== 序列化 ====================
