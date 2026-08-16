@@ -21,6 +21,17 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      # Gradle 依赖缓存：第二次及以后构建跳过依赖下载（7 分钟 → 3-4 分钟）
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
       - name: Install SDK 35 platform (if needed)
         run: |
           sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
