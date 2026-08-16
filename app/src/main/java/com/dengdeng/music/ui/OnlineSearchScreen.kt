@@ -39,16 +39,11 @@ fun OnlineSearchScreen(
     onDownloaded: () -> Unit = {},
     onPlay: (OnlineSong, AudioSource) -> Unit = { _, _ -> }
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
     var loading by remember(query) { mutableStateOf(true) }
     var results by remember(query) { mutableStateOf<List<OnlineSong>>(emptyList()) }
     var error by remember(query) { mutableStateOf(false) }
     // 正在查看音源的歌曲（非 null 时显示音源弹窗）
     var selectedSong by remember { mutableStateOf<OnlineSong?>(null) }
-    // 下载状态：key=平台|品质 → 状态文案
-    var downloadState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
     LaunchedEffect(query) {
         loading = true
@@ -140,23 +135,8 @@ fun OnlineSearchScreen(
     selectedSong?.let { song ->
         OnlineSourceSheet(
             song = song,
-            downloadState = downloadState,
-            onDownload = { source ->
-                scope.launch {
-                    val key = "${source.platform}|${source.quality}"
-                    downloadState = downloadState + (key to "下载中…")
-                    val url = source.url ?: run {
-                        downloadState = downloadState + (key to "不可用")
-                        return@launch
-                    }
-                    val ok = OnlineDownloader.downloadToMusicLibrary(
-                        context, url, song.title, song.artist, source.format
-                    )
-                    downloadState = downloadState + (key to if (ok) "已下载 ✓" else "下载失败")
-                    if (ok) onDownloaded()
-                }
-            },
             onPlay = { source -> onPlay(song, source) },
+            onDownloaded = onDownloaded,
             onDismiss = { selectedSong = null }
         )
     }
@@ -224,19 +204,41 @@ internal fun OnlineSongRow(
     }
 }
 
-/** 音源选择弹窗：展示歌曲信息 + 各平台/品质/格式音源 + 下载 */
+/** 音源选择弹窗：展示歌曲信息 + 各平台/品质/格式音源 + 下载（内部自管理下载状态） */
 @Composable
-private fun OnlineSourceSheet(
+internal fun OnlineSourceSheet(
     song: OnlineSong,
-    downloadState: Map<String, String>,
-    onDownload: (AudioSource) -> Unit,
-    onPlay: (AudioSource) -> Unit = {},
+    fixedSource: AudioSource? = null,        // 非空：直接展示该音源（在线歌已解析 URL），不再查询各平台
+    onPlay: ((AudioSource) -> Unit)? = null, // null：不显示试听按钮（如播放页下载弹窗）
+    onDownloaded: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var sources by remember(song.id) { mutableStateOf<List<AudioSource>?>(null) }
+    // 下载状态：key=平台|品质 → 状态文案
+    val downloadState = remember { mutableStateMapOf<String, String>() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(song.id) {
-        sources = OnlineMetadataFetcher.fetchAudioSources(song)
+        sources = fixedSource?.let { listOf(it) }
+            ?: OnlineMetadataFetcher.fetchAudioSources(song)
+    }
+
+    // 下载执行（IO 线程，不阻塞 UI）
+    fun doDownload(source: AudioSource) {
+        scope.launch {
+            val key = "${source.platform}|${source.quality}"
+            downloadState[key] = "下载中…"
+            val url = source.url ?: run {
+                downloadState[key] = "不可用"
+                return@launch
+            }
+            val ok = OnlineDownloader.downloadToMusicLibrary(
+                context, url, song.title, song.artist, source.format
+            )
+            downloadState[key] = if (ok) "已下载 ✓" else "下载失败"
+            if (ok) onDownloaded()
+        }
     }
 
     AlertDialog(
@@ -283,7 +285,7 @@ private fun OnlineSourceSheet(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
-                            .clickable(enabled = bestState == null) { onDownload(best) }
+                            .clickable(enabled = bestState == null) { doDownload(best) }
                             .padding(horizontal = 12.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -355,8 +357,8 @@ private fun OnlineSourceSheet(
                         AudioSourceRow(
                             source = source,
                             state = downloadState["${source.platform}|${source.quality}"],
-                            onClick = { onDownload(source) },
-                            onPlay = { onPlay(source) }
+                            onClick = { doDownload(source) },
+                            onPlay = if (onPlay != null) ({ onPlay(source) }) else null
                         )
                     }
                 }
@@ -368,22 +370,22 @@ private fun OnlineSourceSheet(
     )
 }
 
-/** 音源条目行：整行点击=在线试听/播放，右侧按钮=下载 */
+/** 音源条目行：整行点击=在线试听/播放，右侧 试听/下载 按钮 */
 @Composable
-private fun AudioSourceRow(
+internal fun AudioSourceRow(
     source: AudioSource,
     state: String?,
     onClick: () -> Unit,
-    onPlay: () -> Unit = {}
+    onPlay: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-            .clickable(enabled = source.url != null) {
-                // 整行点击 = 在线试听/播放（url 可用时）
-                onPlay()
+            .clickable(enabled = source.url != null && onPlay != null) {
+                // 整行点击 = 在线试听/播放（url 可用且支持试听时）
+                onPlay?.invoke()
             }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -431,7 +433,7 @@ private fun AudioSourceRow(
         Spacer(Modifier.width(8.dp))
         // 右侧状态/按钮
         when {
-            state != null && state == "已下载 ✓" -> Row(verticalAlignment = Alignment.CenterVertically) {
+            state != null && state == "已下载 ✓" && onPlay != null -> Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.PlayArrow, contentDescription = "播放", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(2.dp))
                 Text("播放", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
@@ -439,9 +441,20 @@ private fun AudioSourceRow(
             state != null -> Text(state, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             source.url == null -> Text("VIP 受限", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE6A23C))
             else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                // 可试听（整行点击）
-                Icon(Icons.Default.PlayArrow, contentDescription = "试听", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
+                // 试听按钮（独立点击；整行点击同样试听）
+                if (onPlay != null) {
+                    Text(
+                        "试听",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .clickable { onPlay() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
                 // 下载按钮（独立点击）
                 Text(
                     "下载",
@@ -451,7 +464,7 @@ private fun AudioSourceRow(
                         .clip(RoundedCornerShape(6.dp))
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
                         .clickable { onClick() }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
         }

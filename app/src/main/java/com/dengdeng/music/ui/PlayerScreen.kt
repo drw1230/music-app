@@ -69,7 +69,6 @@ import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import com.dengdeng.music.data.CoverStore
 import com.dengdeng.music.data.LyricParser
-import com.dengdeng.music.data.OnlineDownloader
 import com.dengdeng.music.data.OnlineMetadataFetcher
 import com.dengdeng.music.data.Song
 import androidx.media3.common.Player
@@ -104,8 +103,8 @@ fun PlayerScreen(
     var showEditTag by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
     var coverCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
-    // 在线下载状态（null=不显示弹窗）
-    var downloadState by remember { mutableStateOf<String?>(null) }
+    // 在线下载：非 null 时显示音源选择弹窗（在线歌直接展示当前音源，本地歌查询 3 平台）
+    var downloadSong by remember { mutableStateOf<OnlineMetadataFetcher.OnlineSong?>(null) }
     // 封面/歌词切换状态
     var showLyrics by remember { mutableStateOf(false) }
     // 收藏状态从 ViewModel 读取（持久化），切歌时刷新
@@ -318,7 +317,16 @@ fun PlayerScreen(
                             text = { Text("下载歌曲") },
                             onClick = {
                                 showSongMenu = false
-                                downloadState = "正在搜索音源…"
+                                // 构造可下载的在线歌曲（在线歌：直接携带当前音频 URL；本地歌：按歌名查 3 平台）
+                                downloadSong = OnlineMetadataFetcher.OnlineSong(
+                                    platform = if (viewModel.isOnlinePlaying) "在线播放" else "",
+                                    id = "-1",
+                                    title = song.title,
+                                    artist = song.artist,
+                                    album = song.album,
+                                    artUrl = song.albumArtUri?.toString(),
+                                    durationMs = song.durationMs
+                                )
                             }
                         )
                     }
@@ -476,51 +484,24 @@ fun PlayerScreen(
             )
         }
 
-        // 在线下载：自动选全网最高音质（3 平台）→ 下载 → 反馈
-        downloadState?.let { status ->
-            val dlContext = LocalContext.current
-            LaunchedEffect(downloadState) {
-                if (status == "正在搜索音源…") {
-                    // 在线歌直接下载（uri 已是音频 URL）；本地歌构造 OnlineSong 按歌名查 3 平台音源
-                    val url = if (viewModel.isOnlinePlaying) {
-                        song.uri.toString()
-                    } else {
-                        val os = com.dengdeng.music.data.OnlineMetadataFetcher.OnlineSong(
-                            platform = "",
-                            id = "",
-                            title = song.title,
-                            artist = song.artist,
-                            album = song.album,
-                            artUrl = song.albumArtUri?.toString(),
-                            durationMs = song.durationMs
-                        )
-                        OnlineMetadataFetcher.resolveOnlineUrl(os)
-                    }
-                    if (url.isNullOrBlank()) {
-                        downloadState = "未找到可下载的音源（各平台均无权限）"
-                    } else {
-                        downloadState = "正在下载（最高音质）…"
-                        val ok = OnlineDownloader.downloadToMusicLibrary(
-                            dlContext, url, song.title, song.artist
-                        )
-                        downloadState = if (ok) {
-                            "下载完成：${song.title} - ${song.artist}\n已保存到 音乐/DDmusic/"
-                        } else {
-                            "下载失败，请检查网络后重试"
-                        }
-                    }
-                }
-            }
-            val finished = status.contains("完成") || status.contains("失败") || status.contains("未找到")
-            AlertDialog(
-                onDismissRequest = { if (finished) downloadState = null },
-                title = { Text("在线下载", style = MaterialTheme.typography.titleMedium) },
-                text = { Text(status) },
-                confirmButton = {
-                    if (finished) {
-                        TextButton(onClick = { downloadState = null }) { Text("确定") }
-                    }
-                }
+        // 在线下载：音源选择弹窗（在线歌直接展示当前音源；本地歌查询 3 平台音源供选择）
+        downloadSong?.let { os ->
+            OnlineSourceSheet(
+                song = os,
+                fixedSource = if (viewModel.isOnlinePlaying) {
+                    OnlineMetadataFetcher.AudioSource(
+                        platform = "在线播放",
+                        quality = "当前音质",
+                        format = "MP3",
+                        bitrate = 0,
+                        url = song.uri.toString(),
+                        sizeBytes = 0,
+                        vip = false
+                    )
+                } else null,
+                onPlay = null,  // 播放页下载弹窗不需要试听（正在播放当前歌曲）
+                onDownloaded = { viewModel.scanMusic() },
+                onDismiss = { downloadSong = null }
             )
         }
     }
