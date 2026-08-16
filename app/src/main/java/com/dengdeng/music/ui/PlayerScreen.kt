@@ -486,121 +486,36 @@ private fun LyricsView(
 }
 
 /**
- * 自定义进度条：点击跳转 + 滑动相对偏移
+ * 进度条：点击跳转 + 滑动相对偏移（复用 GestureSeekBar）
  * - 点击：直接跳到手指位置
  * - 滑动：拇指从当前播放位置出发，跟手左右移动（滑满条宽 = 整首歌时长）
  */
 @Composable
 private fun PlayerProgressBar(viewModel: MusicViewModel) {
-    val position = viewModel.currentPositionMs
     val duration = viewModel.durationMs.coerceAtLeast(1L)
-    val progress = (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-
-    // 手势状态
-    var barWidthPx by remember { mutableStateOf(1f) }        // 进度条宽度（px）
-    var dragStartMs by remember { mutableStateOf(0L) }        // 滑动起始基准（按下时的播放位置）
-    var dragDeltaPx by remember { mutableStateOf(0f) }        // 累计位移（px）
-    var isDragging by remember { mutableStateOf(false) }
-
-    // 显示进度：拖动时 = 基准 + 相对位移比例；否则 = 播放进度
-    val displayProgress = if (isDragging) {
-        val deltaMs = (dragDeltaPx / barWidthPx * duration).toLong()
-        ((dragStartMs + deltaMs).toFloat() / duration).coerceIn(0f, 1f)
-    } else progress
-
-    val density = LocalDensity.current
-    val thumbHalfPx = with(density) { 8.dp.toPx() }
-    val touchSlopPx = with(density) { 6.dp.toPx() }
+    var dragProgress by remember { mutableStateOf<Float?>(null) }  // 拖动中的显示进度（null=未拖动）
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(32.dp)
-                .onGloballyPositioned { barWidthPx = it.size.width.toFloat() }
-                .pointerInput(duration) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val startX = down.position.x
-                        var accumulated = 0f
-                        var isDrag = false
-                        // 基准 = 按下瞬间的播放位置（拇指从当前播放位置出发）
-                        val baseMs = position
-
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                            if (change == null || change.changedToUp()) {
-                                if (isDrag) {
-                                    // 滑动松手：相对 seek（基准 + 位移比例 * 时长）
-                                    val target = baseMs + (accumulated / barWidthPx * duration).toLong()
-                                    viewModel.seekTo(target.coerceIn(0L, duration))
-                                } else {
-                                    // 点击松手：绝对跳转到手指位置
-                                    val ratio = (startX / barWidthPx).coerceIn(0f, 1f)
-                                    viewModel.seekTo((ratio * duration).toLong())
-                                }
-                                break
-                            }
-                            if (change.positionChanged()) {
-                                val newX = change.position.x
-                                accumulated = newX - startX
-                                if (!isDrag && abs(accumulated) > touchSlopPx) {
-                                    isDrag = true
-                                    dragStartMs = baseMs
-                                }
-                                if (isDrag) {
-                                    dragDeltaPx = accumulated
-                                    isDragging = true
-                                    change.consume()
-                                }
-                            }
-                        }
-                        // 手势结束复位
-                        isDragging = false
-                        dragDeltaPx = 0f
-                    }
-                },
-            contentAlignment = Alignment.CenterStart
-        ) {
-            // 底轨
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.25f))
-            )
-            // 已播放高亮轨
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(displayProgress)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White)
-            )
-            // 拇指（圆心对准进度位置）
-            Box(
-                modifier = Modifier
-                    .offset {
-                        IntOffset(
-                            x = (displayProgress * barWidthPx - thumbHalfPx).roundToInt(),
-                            y = 0
-                        )
-                    }
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-                    .shadow(4.dp, CircleShape)
-            )
-        }
+        GestureSeekBar(
+            positionMs = viewModel.currentPositionMs,
+            durationMs = duration,
+            onSeek = { viewModel.seekTo(it) },
+            onDragState = { dragging, p ->
+                dragProgress = if (dragging) p else null
+            },
+            thumbColor = Color.White,
+            progressColor = Color.White,
+            trackColor = Color.White.copy(alpha = 0.25f)
+        )
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = formatDuration((displayProgress * duration).toLong()),
+                text = formatDuration((dragProgress ?: (viewModel.currentPositionMs.toFloat() / duration)).let {
+                    (it * duration).toLong()
+                }),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.7f)
             )

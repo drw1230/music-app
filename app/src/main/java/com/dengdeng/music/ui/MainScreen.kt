@@ -1297,14 +1297,6 @@ private fun EqualizerIcon(tint: Color) {
 private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
     val song = viewModel.currentSong() ?: return
 
-    val progress = if (viewModel.durationMs > 0) {
-        (viewModel.currentPositionMs.toFloat() / viewModel.durationMs).coerceIn(0f, 1f)
-    } else 0f
-
-    // 拖动中的进度（null 表示未拖动）
-    var dragProgress by remember { mutableStateOf<Float?>(null) }
-    val displayProgress = dragProgress ?: progress
-
     Surface(
         tonalElevation = 3.dp,
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -1313,25 +1305,17 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
             .clickable(onClick = onClick)
     ) {
         Column {
-            // 可拖动的进度条（点击/拖动 seek）
-            Slider(
-                value = displayProgress,
-                onValueChange = { dragProgress = it },
-                onValueChangeFinished = {
-                    dragProgress?.let {
-                        viewModel.seekTo((it * viewModel.durationMs).toLong())
-                    }
-                    dragProgress = null
-                },
+            // 自定义手势进度条（点击跳转 + 从播放位置相对滑动，与播放页一致）
+            GestureSeekBar(
+                positionMs = viewModel.currentPositionMs,
+                durationMs = viewModel.durationMs,
+                onSeek = { viewModel.seekTo(it) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(28.dp)
                     .padding(horizontal = 8.dp),
-                colors = SliderDefaults.colors(
-                    thumbColor = MaterialTheme.colorScheme.primary,
-                    activeTrackColor = MaterialTheme.colorScheme.primary,
-                    inactiveTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                )
+                thumbColor = MaterialTheme.colorScheme.primary,
+                progressColor = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
             )
             Row(
                 modifier = Modifier
