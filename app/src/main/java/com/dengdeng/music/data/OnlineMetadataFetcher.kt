@@ -48,10 +48,15 @@ object OnlineMetadataFetcher {
             val id = s.optLong("id", 0L)
             if (id <= 0L) continue
             val name = s.optString("name", title)
-            val artistName = s.optJSONArray("artists")
+            val artistsArr = s.optJSONArray("artists")
+            val artistName = artistsArr
                 ?.takeIf { it.length() > 0 }
                 ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
-            val artUrl = s.optJSONObject("album")?.optString("picUrl", null)?.takeIf { it.isNotBlank() }
+            // 封面优先专辑 picUrl；缺失时用歌手头像 img1v1Url 兜底
+            var artUrl = s.optJSONObject("album")?.optString("picUrl", null)?.takeIf { it.isNotBlank() }
+            if (artUrl == null && artistsArr != null && artistsArr.length() > 0) {
+                artUrl = artistsArr.optJSONObject(0)?.optString("img1v1Url", null)?.takeIf { it.isNotBlank() }
+            }
             val match = SongMatch(id, name, artistName, artUrl)
 
             // 时长匹配度（秒级误差越小越好）
