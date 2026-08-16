@@ -1110,16 +1110,12 @@ private fun SongRow(
 
         // 封面
         Box {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(song.albumArtUri ?: song.uri)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = "专辑封面",
+            SongCover(
+                song = song,
                 contentScale = ContentScale.Crop,
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
             )
             if (isCurrent) {
                 Box(
@@ -1325,16 +1321,12 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(song.albumArtUri ?: song.uri)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = null,
+                SongCover(
+                    song = song,
                     contentScale = ContentScale.Crop,
+                    shape = RoundedCornerShape(8.dp),
                     modifier = Modifier
                         .size(40.dp)
-                        .clip(RoundedCornerShape(8.dp))
                 )
 
                 Spacer(Modifier.width(12.dp))
@@ -1508,16 +1500,12 @@ private fun HistorySheet(
                             .padding(horizontal = 20.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(song.albumArtUri ?: song.uri)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = null,
+                        SongCover(
+                            song = song,
                             contentScale = ContentScale.Crop,
+                            shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .size(40.dp)
-                                .clip(RoundedCornerShape(8.dp))
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
@@ -1583,16 +1571,12 @@ private fun HistorySheet(
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.width(28.dp)
                         )
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(song.albumArtUri ?: song.uri)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = null,
+                        SongCover(
+                            song = song,
                             contentScale = ContentScale.Crop,
+                            shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .size(40.dp)
-                                .clip(RoundedCornerShape(8.dp))
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {

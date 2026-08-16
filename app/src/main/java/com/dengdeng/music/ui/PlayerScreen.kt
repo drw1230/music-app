@@ -341,8 +341,6 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean) {
         label = "rotation"
     )
 
-    val albumArt = song.albumArtUri ?: song.uri
-
     Box(
         modifier = Modifier
             .size(300.dp)
@@ -362,17 +360,13 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean) {
                 .clip(CircleShape)
                 .background(Color.White.copy(alpha = 0.08f))
         )
-        // 封面
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(albumArt)
-                .crossfade(true)
-                .build(),
-            contentDescription = "专辑封面",
+        // 封面（本地缺失时联网获取）
+        SongCover(
+            song = song,
             contentScale = ContentScale.Crop,
+            shape = CircleShape,
             modifier = Modifier
                 .fillMaxSize(0.92f)
-                .clip(CircleShape)
                 .rotate(if (isPlaying) rotation else 0f)
                 .background(Color.Black.copy(alpha = 0.2f))
         )
@@ -417,8 +411,20 @@ private fun LyricsView(
 
     LaunchedEffect(song.id) {
         loading = true
-        lyrics = LyricParser.loadLyrics(context, song.uri, song.title)
+        lyrics = LyricParser.loadLyrics(context, song.uri, song.title, song.artist)
         loading = false
+    }
+
+    // 加载中提示
+    if (loading) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                "正在获取歌词…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.6f)
+            )
+        }
+        return
     }
 
     // 无歌词提示
@@ -692,16 +698,11 @@ private fun QueueSheet(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 小封面
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(song.albumArtUri ?: song.uri)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = null,
+                        SongCover(
+                            song = song,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.size(44.dp)
                         )
                         Spacer(Modifier.width(12.dp))
 

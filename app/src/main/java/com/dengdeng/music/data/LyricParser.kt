@@ -75,23 +75,47 @@ object LyricParser {
     }
 
     /**
-     * 从歌曲文件读取关联的 .lrc 歌词
-     * 策略：优先找同目录同名 .lrc 文件；找不到则尝试用 MediaStore 查同目录其他 .lrc
+     * 从歌曲读取歌词
+     * 策略：① 本地同目录同名 .lrc → ② 联网获取（网易云，按歌名+艺术家搜索）并缓存到 cacheDir
+     * @param artist 艺术家（联网搜索用）
      */
-    suspend fun loadLyrics(context: Context, songUri: Uri, title: String): List<LyricLine> =
+    suspend fun loadLyrics(context: Context, songUri: Uri, title: String, artist: String = ""): List<LyricLine> =
         withContext(Dispatchers.IO) {
             try {
-                // 方法1：直接尝试读取 Uri 同路径的 .lrc（MediaStore 的 DATA 列已不可用于 Android 10+ 部分情况）
+                // 方法1：本地同路径同名 .lrc
                 val lrcPath = findLrcViaMediaStore(context, songUri, title)
                 if (lrcPath != null) {
                     val text = java.io.File(lrcPath).readText(Charsets.UTF_8)
                     return@withContext parse(text)
+                }
+
+                // 方法2：联网获取（网易云搜索 + 歌词），成功则缓存到 cacheDir
+                val cacheFile = lyricCacheFile(context, title, artist)
+                val cachedText = if (cacheFile.exists()) cacheFile.readText(Charsets.UTF_8) else null
+                if (!cachedText.isNullOrBlank()) return@withContext parse(cachedText)
+
+                val match = OnlineMetadataFetcher.searchSong(title, artist)
+                    ?: return@withContext emptyList()
+                val lyricText = OnlineMetadataFetcher.fetchLyric(match.songId)
+                    ?: return@withContext emptyList()
+                if (lyricText.isNotBlank()) {
+                    runCatching {
+                        cacheFile.parentFile?.mkdirs()
+                        cacheFile.writeText(lyricText, Charsets.UTF_8)
+                    }
+                    return@withContext parse(lyricText)
                 }
                 emptyList()
             } catch (e: Exception) {
                 emptyList()
             }
         }
+
+    /** 歌词磁盘缓存文件（cacheDir/lyrics/歌名-艺术家.lrc） */
+    private fun lyricCacheFile(context: Context, title: String, artist: String): java.io.File {
+        val safeName = "$title-$artist".replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80)
+        return java.io.File(context.cacheDir, "lyrics/$safeName.lrc")
+    }
 
     /**
      * 通过 MediaStore 查找同名 .lrc 文件
