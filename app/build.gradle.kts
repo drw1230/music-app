@@ -31,7 +31,8 @@ android {
     }
 
     signingConfigs {
-        create("debug") {
+        // AGP 内置已有名为 "debug" 的 SigningConfig，直接配置其属性（create 会重名冲突导致 CI 构建失败）
+        getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
