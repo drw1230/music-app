@@ -267,12 +267,12 @@ fun PlayerScreen(
                     .fillMaxWidth()
             ) {
                 Column(Modifier.fillMaxSize()) {
-                    // 封面区（占剩余空间；点击进大歌词页）
+                    // 封面区（占剩余空间；封面下移约 1/3 直径填充中间空白；点击进大歌词页）
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .offset(y = 32.dp)
+                            .offset(y = 96.dp)
                             .clickable { showFullLyrics = true }
                             .padding(top = 8.dp, bottom = 8.dp),
                         contentAlignment = Alignment.Center
@@ -298,8 +298,7 @@ fun PlayerScreen(
                         ) { _ ->
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp),
+                                    .fillMaxWidth(0.86f),
                                 contentAlignment = Alignment.Center
                             ) {
                                 RotatingAlbumArt(
@@ -1005,15 +1004,24 @@ private fun MiniLyricsView(
                 color = Color.White.copy(alpha = 0.5f)
             )
             else -> {
-                // 上一句
+                // 前二句（更暗）
                 Text(
-                    lyrics.getOrNull(currentIndex - 1)?.text ?: " ",
+                    lyrics.getOrNull(currentIndex - 2)?.text ?: " ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.45f),
+                    color = Color.White.copy(alpha = 0.3f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(2.dp))
+                // 前一句
+                Text(
+                    lyrics.getOrNull(currentIndex - 1)?.text ?: " ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.5f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
                 // 当前句（高亮）
                 Text(
                     lyrics.getOrNull(currentIndex)?.text ?: " ",
@@ -1023,12 +1031,21 @@ private fun MiniLyricsView(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(2.dp))
                 // 下一句
                 Text(
                     lyrics.getOrNull(currentIndex + 1)?.text ?: " ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.45f),
+                    color = Color.White.copy(alpha = 0.5f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                // 后二句（更暗）
+                Text(
+                    lyrics.getOrNull(currentIndex + 2)?.text ?: " ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.3f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
