@@ -260,17 +260,24 @@ fun PlayerScreen(
             }
 
             // ==================== Fly 风格中段 ====================
-            // 大封面（点击进入大歌词页；容器与封面一起下移，整个封面区域可点击）
+            // 大封面（点击进大歌词页）+ 封面下方小歌词（三行，点击进大歌词页）
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .offset(y = 96.dp)
-                    .clickable { showFullLyrics = true }
-                    .padding(top = 8.dp, bottom = 12.dp),
-                contentAlignment = Alignment.Center
             ) {
-                Crossfade(
+                Column(Modifier.fillMaxSize()) {
+                    // 封面区（占剩余空间；点击进大歌词页）
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .offset(y = 32.dp)
+                            .clickable { showFullLyrics = true }
+                            .padding(top = 8.dp, bottom = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Crossfade(
                     targetState = showLyrics,
                     animationSpec = tween(durationMillis = 300),
                     label = "cover-lyrics"
@@ -303,6 +310,18 @@ fun PlayerScreen(
                             }
                         }
                     }
+                }
+                    }
+                    // 小歌词（封面下方三行：上一句/当前句/下一句；点击进大歌词页）
+                    MiniLyricsView(
+                        song = song,
+                        viewModel = viewModel,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp)
+                            .clickable { showFullLyrics = true }
+                    )
+                    Spacer(Modifier.height(10.dp))
                 }
             }
 
@@ -945,8 +964,80 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean, coverRefreshToken: 
     }
 }
 
-/** 歌词视图：加载 .lrc 歌词 + 滚动跟随当前行高亮 */
+/** 小歌词：封面下方三行（上一句/当前句/下一句），随播放进度滚动，点击进大歌词页 */
+@Composable
+private fun MiniLyricsView(
+    song: Song,
+    viewModel: MusicViewModel,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var lyrics by remember(song.id) { mutableStateOf<List<LyricParser.LyricLine>>(emptyList()) }
+    var loaded by remember(song.id) { mutableStateOf(false) }
 
+    LaunchedEffect(song.id) {
+        loaded = false
+        lyrics = LyricParser.loadLyrics(context, song.uri, song.title, song.artist)
+        loaded = true
+    }
+
+    // 当前行索引（与 LyricsView 同一套计算：进度 - 歌词微调偏移）
+    val positionMs = viewModel.currentPositionMs
+    val adjustMs = viewModel.lyricOffset(song.id)
+    val currentIndex = remember(lyrics, positionMs, adjustMs) {
+        if (lyrics.isEmpty()) -1
+        else {
+            val idx = lyrics.indexOfLast { it.timeMs <= positionMs - adjustMs }
+            if (idx < 0) 0 else idx
+        }
+    }
+
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        when {
+            !loaded -> Text(
+                "歌词加载中…",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.5f)
+            )
+            lyrics.isEmpty() -> Text(
+                "暂无歌词，点击查看",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.5f)
+            )
+            else -> {
+                // 上一句
+                Text(
+                    lyrics.getOrNull(currentIndex - 1)?.text ?: " ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.45f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(3.dp))
+                // 当前句（高亮）
+                Text(
+                    lyrics.getOrNull(currentIndex)?.text ?: " ",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(3.dp))
+                // 下一句
+                Text(
+                    lyrics.getOrNull(currentIndex + 1)?.text ?: " ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.45f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/** 歌词视图：加载 .lrc 歌词 + 滚动跟随当前行高亮，点击歌词行跳转进度 */
 @Composable
 private fun LyricsView(
     viewModel: MusicViewModel,
