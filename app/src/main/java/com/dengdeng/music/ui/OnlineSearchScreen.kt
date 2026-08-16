@@ -263,13 +263,75 @@ private fun OnlineSourceSheet(
         },
         text = {
             Column {
-                Text(
-                    "选择音源（点击下载）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(8.dp))
                 val list = sources
+                // 全网最高音质优先：无损 > 高品 > 标准，取第一个可下载的音源
+                val qualityOrder = mapOf("无损" to 0, "高品" to 1, "标准" to 2)
+                val best = list
+                    ?.filter { it.url != null }
+                    ?.minByOrNull { qualityOrder[it.quality] ?: 3 }
+
+                if (best != null) {
+                    // 一键下载最高音质
+                    val bestKey = "${best.platform}|${best.quality}"
+                    val bestState = downloadState[bestKey]
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                            .clickable(enabled = bestState == null) { onDownload(best) }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (bestState == null) "下载全网最高音质" else bestState,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                "自动选择：${best.platform} · ${best.quality} ${best.format}${sourceInfoText(best).let { if (it.isNotEmpty()) " · $it" else "" }}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (bestState == null) {
+                            Text(
+                                "最优",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "或手动选择音源（点击下载）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                } else if (list != null && list.isNotEmpty()) {
+                    Text(
+                        "选择音源（点击下载）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
                 when {
                     list == null -> Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
