@@ -751,6 +751,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (songs.isEmpty()) return
         val ctrl = controller ?: return
         onlineQueue = emptyList()
+        radioMode = false
         activeQueue = songs
         val songInfos = songs.map { song ->
             PlaybackService.SongInfo(

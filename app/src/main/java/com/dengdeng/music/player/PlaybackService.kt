@@ -2,6 +2,7 @@ package com.dengdeng.music.player
 
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -32,9 +33,14 @@ class PlaybackService : MediaSessionService() {
             .setConnectTimeoutMs(10000)
             .setReadTimeoutMs(30000)
 
+        // 关键：用 DefaultDataSource 按 URI scheme 分发数据源——
+        // http(s):// 走上面的 httpFactory（带 UA），content://（本地 MediaStore）与 file:// 走系统默认实现。
+        // 若直接把 httpFactory 设为全局工厂，本地歌曲（content://）会因 HttpDataSource 不支持该 scheme 报 Source error。
+        val schemeAwareFactory = DefaultDataSource.Factory(this, httpFactory)
+
         val player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(
-                DefaultMediaSourceFactory(this).setDataSourceFactory(httpFactory)
+                DefaultMediaSourceFactory(this).setDataSourceFactory(schemeAwareFactory)
             )
             .setHandleAudioBecomingNoisy(true)  // 拔出耳机自动暂停
             .build()
