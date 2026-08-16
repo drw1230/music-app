@@ -132,7 +132,6 @@ fun PlayerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF101014))   // 播放页深色背景（Fly 风格，白色歌词才清晰）
             // 跟手位移 + 透明度渐变（滑得越多越透明）
             .graphicsLayer {
                 translationX = dragX.value
@@ -309,10 +308,7 @@ fun PlayerScreen(
                 }
             }
 
-            // 小歌词下移（封面与小歌词之间留白，填充封面与歌名之间的空间）
-            Spacer(Modifier.height(72.dp))
-
-            // 小歌词（5 行：前2/前1/当前/后1/后2；点击进大歌词页）
+            // 小歌词（5 行：前2/前1/当前/后1/后2；紧贴封面下沿，点击进大歌词页）
             MiniLyricsView(
                 song = song,
                 viewModel = viewModel,
@@ -989,59 +985,66 @@ private fun MiniLyricsView(
         }
     }
 
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    // 深色半透明底板：白色歌词在任意主题背景上都清晰（播放页整体背景不变）
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         when {
             !loaded -> Text(
                 "歌词加载中…",
-                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, fontWeight = FontWeight.Medium),
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 21.sp, fontWeight = FontWeight.Light),
                 color = Color.White
             )
             lyrics.isEmpty() -> Text(
                 "暂无歌词 · 点击查看",
-                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, fontWeight = FontWeight.Medium),
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 21.sp, fontWeight = FontWeight.Light),
                 color = Color.White
             )
             else -> {
                 // 前二句（更暗）
                 Text(
                     lyrics.getOrNull(currentIndex - 2)?.text ?: " ",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, fontWeight = FontWeight.Light),
                     color = Color.White.copy(alpha = 0.4f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(3.dp))
                 // 前一句
                 Text(
                     lyrics.getOrNull(currentIndex - 1)?.text ?: " ",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
-                    color = Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, fontWeight = FontWeight.Light),
+                    color = Color.White.copy(alpha = 0.6f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(4.dp))
-                // 当前句（高亮）
+                Spacer(Modifier.height(3.dp))
+                // 当前句（高亮：白色中粗）
                 Text(
                     lyrics.getOrNull(currentIndex)?.text ?: " ",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 30.sp, fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 21.sp, fontWeight = FontWeight.Medium),
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(3.dp))
                 // 下一句
                 Text(
                     lyrics.getOrNull(currentIndex + 1)?.text ?: " ",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
-                    color = Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, fontWeight = FontWeight.Light),
+                    color = Color.White.copy(alpha = 0.6f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(3.dp))
                 // 后二句（更暗）
                 Text(
                     lyrics.getOrNull(currentIndex + 2)?.text ?: " ",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 24.sp),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, fontWeight = FontWeight.Light),
                     color = Color.White.copy(alpha = 0.4f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
