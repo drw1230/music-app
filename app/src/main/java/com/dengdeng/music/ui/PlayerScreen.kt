@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
@@ -64,7 +65,9 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
+import com.dengdeng.music.data.CoverStore
 import com.dengdeng.music.data.LyricParser
+import com.dengdeng.music.data.OnlineMetadataFetcher
 import com.dengdeng.music.data.Song
 import androidx.media3.common.Player
 import kotlinx.coroutines.launch
@@ -88,6 +91,11 @@ fun PlayerScreen(
     }
 
     var showQueue by remember { mutableStateOf(false) }
+    // 歌曲菜单 + 封面选择
+    var showSongMenu by remember { mutableStateOf(false) }
+    var showCoverPicker by remember { mutableStateOf(false) }
+    var coverRefreshToken by remember { mutableStateOf(0) }
+    var coverCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
     // 封面/歌词切换状态
     var showLyrics by remember { mutableStateOf(false) }
     // 收藏状态从 ViewModel 读取（持久化），切歌时刷新
@@ -240,6 +248,28 @@ fun PlayerScreen(
                         tint = Color.White
                     )
                 }
+                // 歌曲菜单（刷新封面等）
+                Box {
+                    IconButton(onClick = { showSongMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "歌曲菜单",
+                            tint = Color.White
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showSongMenu,
+                        onDismissRequest = { showSongMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("刷新封面") },
+                            onClick = {
+                                showSongMenu = false
+                                showCoverPicker = true
+                            }
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -269,7 +299,11 @@ fun PlayerScreen(
                             animationSpec = tween(durationMillis = 400),
                             label = "album-crossfade"
                         ) { _ ->
-                            RotatingAlbumArt(song = song, isPlaying = viewModel.isPlaying)
+                            RotatingAlbumArt(
+                                song = song,
+                                isPlaying = viewModel.isPlaying,
+                                coverRefreshToken = coverRefreshToken
+                            )
                         }
                     }
                 }
@@ -329,12 +363,88 @@ fun PlayerScreen(
                 onDismiss = { showQueue = false }
             )
         }
+
+        // 刷新封面：多源候选选择弹窗
+        if (showCoverPicker) {
+            val coverContext = LocalContext.current
+            CoverPickerDialog(
+                song = song,
+                candidates = coverCandidates,
+                onFetch = {
+                    // 进入弹窗时爬取多源候选封面
+                    LaunchedEffect(song.id) {
+                        coverCandidates = OnlineMetadataFetcher.searchArtworkCandidates(
+                            song.title, song.artist, song.durationMs
+                        )
+                    }
+                },
+                onPick = { url ->
+                    CoverStore.save(coverContext, song.title, song.artist, url)
+                    coverRefreshToken++
+                    showCoverPicker = false
+                },
+                onDismiss = { showCoverPicker = false }
+            )
+        }
     }
+}
+
+/** 封面候选选择弹窗：展示多源爬取的封面，用户自选 */
+@Composable
+private fun CoverPickerDialog(
+    song: Song,
+    candidates: List<String>,
+    onFetch: @Composable () -> Unit,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    onFetch()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择封面", style = MaterialTheme.typography.titleMedium) },
+        text = {
+            if (candidates.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "正在搜索候选封面…",
+                        color = Color.White.copy(alpha = 0.6f)
+                    )
+                }
+            } else {
+                Column {
+                    candidates.forEach { url ->
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(url)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(110.dp)
+                                .padding(vertical = 4.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onPick(url) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 /** 旋转封面：播放时匀速旋转 + 底部光晕，暂停时静止 */
 @Composable
-private fun RotatingAlbumArt(song: Song, isPlaying: Boolean) {
+private fun RotatingAlbumArt(song: Song, isPlaying: Boolean, coverRefreshToken: Int = 0) {
     val transition = rememberInfiniteTransition(label = "album-rotate")
     val rotation by transition.animateFloat(
         initialValue = 0f,
@@ -370,6 +480,7 @@ private fun RotatingAlbumArt(song: Song, isPlaying: Boolean) {
             song = song,
             contentScale = ContentScale.Crop,
             shape = CircleShape,
+            refreshToken = coverRefreshToken,
             modifier = Modifier
                 .fillMaxSize(0.92f)
                 .rotate(if (isPlaying) rotation else 0f)

@@ -41,6 +41,62 @@ object OnlineMetadataFetcher {
     private fun cacheKey(title: String, artist: String) = "$title|$artist".trim().lowercase()
 
     /**
+     * 爬取多个候选封面 URL（多源汇总，供用户手动选择）：
+     * iTunes 前 3 个（时长核对排序）→ 网易云专辑/歌手 → QQ 音乐 albummid
+     */
+    suspend fun searchArtworkCandidates(title: String, artist: String, durationMs: Long? = null): List<String> = withContext(Dispatchers.IO) {
+        if (title.isBlank()) return@withContext emptyList()
+        val out = mutableListOf<String>()
+        val seen = mutableSetOf<String>()
+
+        fun add(u: String?) {
+            if (!u.isNullOrBlank() && seen.add(u)) out.add(u)
+        }
+
+        // iTunes（最多 3 个，按时长排序）
+        runCatching {
+            val query = URLEncoder.encode("$title $artist".trim(), "UTF-8")
+            val json = httpGet(URL("https://itunes.apple.com/search?term=$query&entity=song&limit=5"))
+            val results = json?.optJSONArray("results") ?: return@runCatching
+            val items = mutableListOf<Pair<Long, String>>()
+            for (i in 0 until results.length()) {
+                val r = results.optJSONObject(i) ?: continue
+                val art = r.optString("artworkUrl100", "").takeIf { it.isNotBlank() }
+                    ?.replace("100x100", "600x600") ?: continue
+                val dur = r.optLong("trackTimeMillis", 0L)
+                items.add(dur to art)
+            }
+            if (durationMs != null) {
+                items.sortBy { kotlin.math.abs(it.first - durationMs) }
+            }
+            items.take(3).forEach { add(it.second) }
+        }
+
+        // 网易云（专辑封面 + 歌手头像）
+        runCatching {
+            val query = URLEncoder.encode("$title $artist".trim(), "UTF-8")
+            val json = httpGet(URL("https://music.163.com/api/search/get?s=$query&type=1&limit=3"))
+            val songs = json?.optJSONObject("result")?.optJSONArray("songs") ?: return@runCatching
+            for (i in 0 until songs.length()) {
+                val s = songs.optJSONObject(i) ?: continue
+                add(s.optJSONObject("album")?.optString("picUrl", null))
+                val artists = s.optJSONArray("artists")
+                if (artists != null && artists.length() > 0) {
+                    add(artists.optJSONObject(0)?.optString("img1v1Url", null))
+                }
+            }
+        }
+
+        // QQ 音乐（albummid 封面）
+        runCatching {
+            val qq = searchSongQQ(title, artist, durationMs)
+            add(qq?.albummid?.takeIf { it.isNotBlank() }?.let { qqAlbumArtUrl(it) })
+        }
+
+        out
+    }
+
+    /**
      * 搜索封面（多源自动核对）：
      * 1. iTunes 主源：返回高清封面 + 时长，按时长接近度自动核对选最佳
      * 2. 网易云兜底：iTunes 无结果时用网易云专辑/歌手图
