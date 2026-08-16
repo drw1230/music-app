@@ -67,6 +67,7 @@ import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import com.dengdeng.music.data.CoverStore
 import com.dengdeng.music.data.LyricParser
+import com.dengdeng.music.data.OnlineDownloader
 import com.dengdeng.music.data.OnlineMetadataFetcher
 import com.dengdeng.music.data.Song
 import androidx.media3.common.Player
@@ -96,6 +97,8 @@ fun PlayerScreen(
     var showCoverPicker by remember { mutableStateOf(false) }
     var coverRefreshToken by remember { mutableStateOf(0) }
     var coverCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 在线下载状态（null=不显示弹窗）
+    var downloadState by remember { mutableStateOf<String?>(null) }
     // 封面/歌词切换状态
     var showLyrics by remember { mutableStateOf(false) }
     // 收藏状态从 ViewModel 读取（持久化），切歌时刷新
@@ -268,6 +271,13 @@ fun PlayerScreen(
                                 showCoverPicker = true
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text("下载歌曲") },
+                            onClick = {
+                                showSongMenu = false
+                                downloadState = "正在搜索音源…"
+                            }
+                        )
                     }
                 }
             }
@@ -384,6 +394,41 @@ fun PlayerScreen(
                     showCoverPicker = false
                 },
                 onDismiss = { showCoverPicker = false }
+            )
+        }
+
+        // 在线下载：搜索音源 → 下载 → 反馈
+        downloadState?.let { status ->
+            val dlContext = LocalContext.current
+            LaunchedEffect(downloadState) {
+                if (status == "正在搜索音源…") {
+                    val candidates = OnlineDownloader.searchCandidates(song.title, song.artist, song.durationMs)
+                    val pick = candidates.firstOrNull { !it.audioUrl.isNullOrBlank() }
+                    if (pick == null) {
+                        downloadState = "未找到可下载的音源（网易云/QQ 均无权限）"
+                    } else {
+                        downloadState = "正在下载（${pick.source}）…"
+                        val ok = OnlineDownloader.downloadToMusicLibrary(
+                            dlContext, pick.audioUrl!!, pick.title, pick.artist
+                        )
+                        downloadState = if (ok) {
+                            "下载完成：${pick.title} - ${pick.artist}\n已保存到 音乐/DDmusic/"
+                        } else {
+                            "下载失败，请检查网络后重试"
+                        }
+                    }
+                }
+            }
+            val finished = status.contains("完成") || status.contains("失败") || status.contains("未找到")
+            AlertDialog(
+                onDismissRequest = { if (finished) downloadState = null },
+                title = { Text("在线下载", style = MaterialTheme.typography.titleMedium) },
+                text = { Text(status) },
+                confirmButton = {
+                    if (finished) {
+                        TextButton(onClick = { downloadState = null }) { Text("确定") }
+                    }
+                }
             )
         }
     }
