@@ -37,7 +37,7 @@ fun SongCover(
 
     LaunchedEffect(song.id, needOnline) {
         if (needOnline && artUrl == null) {
-            artUrl = OnlineMetadataFetcher.searchSong(song.title, song.artist)?.albumArtUrl
+            artUrl = OnlineMetadataFetcher.searchArtwork(song.title, song.artist, song.durationMs)
         }
     }
 

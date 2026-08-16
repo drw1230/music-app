@@ -26,8 +26,59 @@ object OnlineMetadataFetcher {
 
     // 内存缓存：搜索 key（title|artist）→ 匹配结果，避免每次切歌都重复请求
     private val matchCache = mutableMapOf<String, SongMatch>()
+    // 封面缓存：key（title|artist）→ 封面 URL
+    private val artworkCache = mutableMapOf<String, String>()
 
     private fun cacheKey(title: String, artist: String) = "$title|$artist".trim().lowercase()
+
+    /**
+     * 搜索封面（多源自动核对）：
+     * 1. iTunes 主源：返回高清封面 + 时长，按时长接近度自动核对选最佳
+     * 2. 网易云兜底：iTunes 无结果时用网易云专辑/歌手图
+     */
+    suspend fun searchArtwork(title: String, artist: String, durationMs: Long? = null): String? = withContext(Dispatchers.IO) {
+        if (title.isBlank()) return@withContext null
+        val key = "art|${cacheKey(title, artist)}"
+        artworkCache[key]?.let { return@withContext it }
+
+        // —— iTunes（封面主源，时长自动核对）——
+        val query = URLEncoder.encode("$title $artist".trim(), "UTF-8")
+        val itunesUrl = URL("https://itunes.apple.com/search?term=$query&entity=song&limit=5")
+        val itunesJson = httpGet(itunesUrl)
+        val results = itunesJson?.optJSONArray("results")
+        if (results != null && results.length() > 0) {
+            var bestUrl: String? = null
+            var bestDiff = Long.MAX_VALUE
+            for (i in 0 until results.length()) {
+                val r = results.optJSONObject(i) ?: continue
+                val art = r.optString("artworkUrl100", "").takeIf { it.isNotBlank() }
+                    ?.replace("100x100", "600x600")   // 升级为高清大图
+                if (art == null) continue
+                val dur = r.optLong("trackTimeMillis", 0L)
+                if (durationMs != null && dur > 0) {
+                    // 时长自动核对：选与本地歌曲时长最接近的
+                    val diff = kotlin.math.abs(dur - durationMs)
+                    if (diff < bestDiff) {
+                        bestDiff = diff
+                        bestUrl = art
+                    }
+                } else {
+                    bestUrl = art
+                    break
+                }
+            }
+            if (bestUrl != null) {
+                artworkCache[key] = bestUrl
+                return@withContext bestUrl
+            }
+        }
+
+        // —— 网易云兜底（专辑封面或歌手头像）——
+        val match = searchSong(title, artist, durationMs)
+        val neteaseArt = match?.albumArtUrl
+        if (neteaseArt != null) artworkCache[key] = neteaseArt
+        return@withContext neteaseArt
+    }
 
     /** 搜索歌曲，返回最佳匹配（按时长接近度，无时长信息则取第一个） */
     suspend fun searchSong(title: String, artist: String, durationMs: Long? = null): SongMatch? = withContext(Dispatchers.IO) {
