@@ -485,11 +485,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         controller?.seekTo(positionMs)
     }
 
-    /** 跳转并播放：暂停时拖动/点按进度条后，seek 到目标位置并开始播放 */
+    /** 跳转并播放：拖动/点按进度条后，seek 到目标位置；若暂停则开始播放（播放中 play() 无副作用，可抵消 seek 的瞬时暂停） */
     fun seekAndPlay(positionMs: Long) {
         val ctrl = controller ?: return
+        val wasPlaying = ctrl.isPlaying
         ctrl.seekTo(positionMs)
-        if (!ctrl.isPlaying) ctrl.play()
+        // 无论之前是否播放，都确保恢复播放（seek 过程中 Media3 可能短暂触发 isPlaying=false，
+        // 若不强制 play，播放中拖动会在按钮上闪一下暂停图标）
+        if (!wasPlaying || !ctrl.isPlaying) ctrl.play()
     }
 
     /** 当前播放队列（playSong/playSongs 时记录，供 currentSong 精确取歌） */
