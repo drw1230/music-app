@@ -1,75 +1,69 @@
-# DDmusic 音乐 App — 项目状态汇总（2026-08-16 15:15）
+# DDmusic 音乐 App — 项目状态与开发档案（v1.0.0 正式版）
 
-> 给新会话/新窗口的快速上手文档。完整经验见 `.workbuddy/memory/MEMORY.md`（自动注入）。
+> 给新会话/新窗口的快速上手文档。完整排障史见旧工作区 `...\obsidian\agent\work buddy\2026-08-14-21-06-06\`（MEMORY.md v2-v5 + 每日日志 + 决策文档）。
+> 当日工作日志见当前工作区 `.workbuddy/memory/2026-08-16.md`。
 
 ## 一、项目总览
 
-- **应用**：DDmusic —— 本地音乐 + 在线试听/下载的安卓音乐播放器
-- **代码**：`D:\dev\music-app`（Git 仓库，master 分支，当前 `fda59d5`）
-- **远程**：`https://github.com/drw1230/music-app`（公开仓库，GitHub Actions 云端构建）
-- **包名**：`com.dengdeng.music`（minSdk 26 / targetSdk 35 / compileSdk 35，debug 签名）
-- **核心功能**：
-  - 本地曲库扫描（MediaStore）+ 播放（Media3 ExoPlayer + MediaSessionService 后台播放）
-  - 播放页：旋转封面/歌词滚动跟随+微调/上下滑切歌/均衡器（Equalizer+BassBoost+Virtualizer）
-  - 在线能力：搜索（网易云+QQ+酷狗 3 源聚合音源）、试听（曲库底部迷你条统一控制）、下载入库、每日电台（双榜 40 首 + 负反馈过滤 + 播完自动刷新）、歌词/封面多源联网获取
-  - 记忆：收藏（喜欢）/歌单/搜索历史/播放历史/循环乱序/上次播放（重启恢复但保持暂停）/跳过歌 全部持久化
-- **技术栈**：Kotlin + Jetpack Compose + Media3 + DataStore + Coil + AGP 8.9.1 + Gradle 8.11.1 + JDK 21（本机）/ 17（CI）
+- **应用**：DDmusic —— 本地音乐 + 在线试听/下载的安卓音乐播放器（**v1.0.0 正式版**）
+- **代码**：`D:\dev\music-app`（Git 仓库，master 分支，v1.0.0 = `86d6a5b`）
+- **远程**：`https://github.com/drw1230/music-app`（Private 仓库，SSH 免密 push）
+- **包名**：`com.dengdeng.music`（minSdk 26 / targetSdk 35 / compileSdk 35，debug 签名 keystore 入仓库）
+- **版本**：versionCode 1 / versionName 1.0.0
+- **技术栈**：Kotlin + Jetpack Compose + Media3 + DataStore + Coil + AGP 8.9.1 + Gradle 8.11.1 + JDK 21
 
-## 二、开发历史（git 主要里程碑）
+## 二、功能清单（v1.0.0）
+
+| 模块 | 功能 |
+|---|---|
+| **本地曲库** | MediaStore 智能扫描；封面/歌词自动获取（CoverStore/LyricParser 持久化）；曲库缓存秒显（启动不重扫转圈） |
+| **曲库 tab** | 全部 / 喜欢（本地+在线收藏合并）/ 最近播放（本地+在线按时间倒序）/ 歌单 |
+| **播放页（Fly 风格）** | 大封面（点击进大歌词页，系统返回键回播放页）；歌词滚动跟随+点击/拖动控制进度；控制栏（🔁模式/⬇下载/▶≡队列/⋮菜单）；大播放按钮；上下滑切歌/左右滑关闭 |
+| **迷你播放条** | 全局共用（曲库/电台/冷门探索）：封面/歌名/🔁循环/⏮/⏯/⏭；点击进全屏；在线歌同样显示上下曲 |
+| **在线搜索** | 网易云+QQ+酷狗 3 源聚合；音源弹窗（试听 + 标准/高品/无损下载）；下载自动保存封面+歌词到本地（.lrc 同目录） |
+| **每日电台** | 探索版（随机 2→3 榜单 + 常听歌手 + 随机歌单混合）、熟悉版（纯相似曲目：weapi simiSong，不要本地/歌手维度）；进入默认不播放；音源解析过滤（只推荐能解析出 URL 的歌）；播放时 onPlayerError 立即跳 + 5 秒缓冲守卫；电台列表点击 = 整单队列播放（支持上下曲） |
+| **智能歌单** | 最常听（本地+在线合并次数统计）、冷门探索（平台冷门歌，非本地/没听过，刷新换一批）；在线歌可收藏进"喜欢" |
+| **记忆持久化** | 收藏/歌单/播放历史/在线播放记录/搜索历史/循环模式/上次播放位置/主题/歌词偏移/跳过歌/电台最近推荐（30 天过期）全部 DataStore 跨重启保留 |
+| **其他** | 深色主题、睡眠定时（曲库⋮菜单）、自定义封面、标签编辑、歌词微调、均衡器、R8 优化（release 22MB→2.9MB）、SplashScreen API（系统启动屏瞬间消失 + 品牌图） |
+
+## 三、开发历史（git 主要里程碑）
 
 | 版本 | 提交 | 内容 |
 |---|---|---|
-| v0.1.0 | 44f63a7 | 骨架：本地扫描 + 播放 |
-| v0.1.x | 816ff4a→b772268 | 后台播放/全屏页/队列/深色主题/封面闪退修复/美化 |
-| v0.2.0 | 3164f6f | 改名 DDmusic + 红黑主题图标 + 乱序播放 + 曲库头部卡片 |
-| v0.3.0 | 42d3a5c | 收藏持久化 + 我的歌单 + 迷你条拖进度 + 本地搜索 |
-| v0.3.1 | c933891/c0eef6c | 喜欢/长按菜单/从列表移除/删除（createDeleteRequest） |
-| v0.3.2 | 6941313 | 更多菜单 + 工具链升级 |
-| v3-1 | 105666c | 在线试听/批量下载/歌词微调/编辑标签 |
-| v3-2 | 2f1983d | 在线试听改迷你条 + 移除批量下载 + 均衡器 |
-| v3-3 | 0fbfe7e | 每日电台（双榜+负反馈+在线队列） |
-| v3-3b | c97c09e | 电台入口/自动播放/刷新；电台点歌进全屏；播放页在线歌支持 + 下载 |
-| v3-3c | ac782ad | 搜索音源行"试听"按钮；OnlineSourceSheet 重构；**修复播放页下载卡死** |
-| v3-3d | 19bbf45 | **①音源查询并行化+缓存5分钟+超时6s（下载弹窗不再卡）②ExoPlayer 加 UA+跨协议重定向（在线流不再403缓冲）③电台播完自动刷新继续播（radioMode/radioQueueEnded）④重启恢复歌曲+进度但保持暂停 ⑤搜索历史默认一排+'历史 N'展开** |
-| v3-3e | 638c676 | 在线试听统一迷你条（不进全屏）+ 搜索历史点击搜索框才显示 |
-| v3-3f | 2110072 | 迷你条点击（本地/在线）均可进全屏播放界面 |
-| CI | 071007d→fda59d5 | GitHub Actions 云端构建 + 签名统一（keystore 入仓库） |
+| v0.1.0→v0.3.2 | 44f63a7→6941313 | 骨架/后台播放/全屏/队列/主题/收藏/歌单/迷你条/更多菜单 |
+| v3-x | 105666c→2110072 | 在线试听/均衡器/每日电台/音源并行化/UA 数据源修复/迷你条进全屏 |
+| CI | 071007d→fda59d5 | GitHub Actions 云端构建 + keystore 签名统一 |
+| v0.9.x | ff11578 | 曲库缓存秒显 + 启动体验优化（R8/权限延后/SplashScreen API/图标品牌图） |
+| **v1.0.0** | **86d6a5b** | **正式版**：智能歌单（最常听/冷门探索）、在线收藏进喜欢、tab 专辑→最近、电台探索版 B+C+D 混合/熟悉版相似曲目（weapi simiSong）、三模块数据源随机化 + 30 天记忆过期、Fly 风格播放页、下载保存封面歌词、定时器移除、关于弹窗可滑动功能说明 |
 
-## 三、当前进度（2026-08-16 16:00）
+## 四、构建环境（重要！WSL2 容器构建）
 
-- ✅ **功能全部完成**（最近一轮 2110072：在线试听统一迷你条 + 点迷你条进全屏）
-- ✅ **CI 云端构建出包正常**（be36c3a 曾因 SigningConfig 重名失败 → 379b142 修复；签名用仓库内 keystore）
-- ✅ **本地播放 Source error bug 已修复**（c4446a0：在线 UA 数据源全局覆盖导致 content:// 加载失败，改 DefaultDataSource 按 scheme 分发）→ 真机复验：本地播放 + 电台→曲库切换均正常
-- ✅ **仓库已改 Private**（匿名访问 404 即此原因）
-- APK 本地位置：`E:\tmp\ci-logs\apk\app-debug.apk`（最新 c4446a0）
+- **本机 Gradle 构建永久放弃**（native-platform.dll.lock 拒绝访问，不可逆）→ **一律 WSL2 容器构建**
+- **一键命令（Windows Git Bash）**：`bash build.bat`（仅构建）或 `bash build.bat install`（构建+adb 装手机）
+  - 原理：WSL2 Ubuntu-2404 内构建（/opt/music-app + /root/.gradle 在 ext4），rsync 同步源码，APK 拷回 `app\build\outputs\apk\debug\`
+  - 性能：**增量构建 3-8 秒**；工具链 JDK21/SDK/Gradle 8.11.1 全在 WSL 内
+- **云端 CI 保留为兜底**：`git push`（SSH）→ Actions → 下载 artifact → adb 安装
+- **git remote（SSH 免密）**：`git@github.com:drw1230/music-app.git`（~/.ssh/id_ed25519_github + config 走 ssh.github.com:443）
+- 手机 adb：`R5CWC08ZBET`
 
-## 四、构建环境（重要！2026-08-16 16:40 更新：容器构建已替代云端）
+## 五、开发流程（下次开发照此执行）
 
-- **本机 Gradle 构建 12:06 起彻底异常**：`Failed to load native library 'native-platform.dll'`（Gradle 写 .lock 被系统"拒绝访问"），重启×4/坚果云全停/Defender 关闭均无效 → 本机构建永久放弃
-- **✅ 新主流程（2026-08-16 搭好）：WSL2 容器构建**，与 Windows 驱动层完全隔离
-  - 一键命令（Windows）：`build.bat`（仅构建）或 `build.bat install`（构建+adb 装手机）
-  - 原理：WSL2 Ubuntu-2404 内构建（/opt/music-app + /root/.gradle 全在 ext4），rsync 同步源码，APK 拷回 `D:\dev\music-app\app\build\outputs\apk\debug\`
-  - 性能：**增量构建 7 秒**（首次 2m34s 含依赖下载）；无改动 1-2s
-  - 工具链：JDK21（apt）+ SDK /opt/android-sdk（腾讯镜像）+ Gradle 8.11.1 /opt/gradle（腾讯镜像）
-  - 已实测：构建成功 + adb 覆盖安装 R5CWC08ZBET + 应用启动 ✅
-  - 详细踩坑：工作区 `2026-08-16-16-09-21\.workbuddy\memory\2026-08-16.md`
-- 云端 CI 保留为兜底：改代码 → `git push`（SSH，免 token）→ Actions（缓存后 3-4 分钟）→ 下载 artifact → adb 安装
-- **git remote 已切 SSH**：`git@github.com:drw1230/music-app.git`（~/.ssh/id_ed25519_github + config 走 ssh.github.com:443，6/4 已配好）
-- 手机 adb 连接正常：`R5CWC08ZBET`
+1. **改代码**（`D:\dev\music-app`，Kotlin + Compose）
+2. **自查编译性**（引用/import/签名一致性）
+3. `bash build.bat install` → **构建+装手机（3-8 秒）** → **交付用户验证**（不做自动化真机验收，除非根因不明）
+4. 用户反馈 → 修 → 再装
+5. 稳定后 `git add -A && git commit && git push`（SSH 免密）
+6. 更新 `.workbuddy/memory/2026-08-16.md` 工作日志 + 本文件（PROJECT_STATUS.md）
 
-## 五、关键路径
+## 六、关键路径
 
-- 项目：`D:\dev\music-app`
-- 构建产物（本机旧）：`D:\dev\music-app\app\build\outputs\apk\debug\app-debug.apk`
-- CI 产物下载：`https://github.com/drw1230/music-app/actions` → Artifacts
-- 工作区日志：`.workbuddy/memory/2026-08-16.md`
-- 排障工具：`E:\tmp\NPInit6.java`（Native.init 复现）、`E:\tmp\LockTest3.java`（Java rw 测试）
+- 项目：`D:\dev\music-app`；APK：`app\build\outputs\apk\debug\app-debug.apk`
+- 旧工作区（完整排障史）：`...\obsidian\agent\work buddy\2026-08-14-21-06-06\`
+- 当前工作区日志：`.workbuddy/memory/2026-08-16.md`；长期约定：`.workbuddy/memory/MEMORY.md`
 
-## 六、待办 / 提醒
+## 七、待办 / 提醒
 
-1. **构建方式已切换**：优先 `build.bat`（容器构建 7s），CI 兜底
-2. **用户验证**：最新 APK 已装到手机（容器构建版）——本地播放/电台/搜索试听回归
-2. GitHub token（ghp_0eC5...）已暴露 → **SSH push 已通，token 可撤销**（Settings → Developer settings → tokens → Delete）；如需 API 查询可另建 fine-grained 只读 token
-3. 仓库已 Private ✅
-4. 用户反馈后如有新需求 → 改代码 push（SSH）→ CI 出包（缓存加速后 3-4 分钟）
-5. 后续优化（可选）：构建成功自动发 GitHub Release；容器构建（Docker/WSL2）彻底告别等待
+1. **v1.0.0 已发布**：代码已 push（86d6a5b），APK 已装手机
+2. GitHub token（ghp_0eC5...）曾在会话暴露 → 建议撤销重建（SSH push 不受影响）
+3. 后续可选优化：构建成功自动发 GitHub Release；音频焦点/耳机线控；桌面小组件
+4. 用户偏好记录（长期）：电台/冷门探索**每次打开要不同**（大池子+随机化+30天记忆过期已实现）；熟悉版**不要本地歌**只要相似曲目；**不做 AI 自动化真机验收**（用户自己验）
