@@ -36,13 +36,14 @@ object OnlineMetadataFetcher {
 
     /** 联网搜索结果（多源合并展示用） */
     data class OnlineSong(
-        val platform: String,      // 来源平台："网易云" / "QQ音乐"
-        val id: String,            // 网易云数字 id 或 QQ songmid
+        val platform: String,      // 来源平台："网易云" / "QQ音乐" / "酷狗"
+        val id: String,            // 网易云数字 id / QQ songmid / 酷狗普通 FileHash
         val title: String,
         val artist: String,
         val album: String,
         val artUrl: String?,
-        val durationMs: Long
+        val durationMs: Long,
+        val extra: String = ""     // 平台附加信息（酷狗：各音质 hash/大小 JSON）
     )
 
     /** 单曲音源条目（不同平台/品质/格式） */
@@ -416,6 +417,44 @@ object OnlineMetadataFetcher {
             }
         } catch (e: Exception) { }
 
+        // —— 酷狗 ——
+        try {
+            val kUrl = URL("https://songsearch.kugou.com/song_search_v2?keyword=" + URLEncoder.encode(q, "UTF-8") + "&page=1&pagesize=$limit")
+            val kJson = httpGet(kUrl)
+            val kSongs = kJson?.optJSONObject("data")?.optJSONArray("lists")
+            if (kSongs != null) {
+                for (i in 0 until kSongs.length()) {
+                    val s = kSongs.optJSONObject(i) ?: continue
+                    val hash = s.optString("FileHash", "")
+                    if (hash.isBlank()) continue
+                    // 打包各音质 hash/大小信息供音源界面使用
+                    val extra = JSONObject()
+                        .put("hash", hash)
+                        .put("hqHash", s.optString("HQFileHash", ""))
+                        .put("sqHash", s.optString("SQFileHash", ""))
+                        .put("size", s.optLong("FileSize", 0L))
+                        .put("hqSize", s.optLong("HQFileSize", 0L))
+                        .put("sqSize", s.optLong("SQFileSize", 0L))
+                        .put("hqBit", s.optInt("HQBitrate", 0))
+                        .put("sqBit", s.optInt("SQBitrate", 0))
+                        .put("pay", s.optInt("PayType", 0))
+                        .toString()
+                    results.add(
+                        OnlineSong(
+                            platform = "酷狗",
+                            id = hash,
+                            title = s.optString("SongName", ""),
+                            artist = s.optString("SingerName", ""),
+                            album = s.optString("AlbumName", ""),
+                            artUrl = s.optString("AlbumImage", null)?.takeIf { it.isNotBlank() },
+                            durationMs = (s.optInt("Duration", 0) * 1000L),
+                            extra = extra
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) { }
+
         // 同一首歌多平台命中时去重（按 歌名|歌手）
         val dedup = LinkedHashMap<String, OnlineSong>()
         for (s in results) {
@@ -428,47 +467,147 @@ object OnlineMetadataFetcher {
     }
 
     /**
-     * 查询单曲的所有可用音源（多平台 × 多品质）
+     * 查询单曲的所有可用音源（跨平台聚合：网易云 + QQ音乐 + 酷狗 × 各品质档）
+     * 不局限于来源平台——点任何一首歌都能看到全部渠道的音源
      * - 网易云：128k 标准 / 320k 高品 / 无损（VIP 返回 null url）
      * - QQ 音乐：M500 mp3 128k / M800 mp3 320k / F000 flac 无损（VIP 返回空 purl）
+     * - 酷狗：普通 / 320k 高品 / 无损 flac（免费歌曲多，Privilege=0 可直接下载）
      */
     suspend fun fetchAudioSources(song: OnlineSong): List<AudioSource> = withContext(Dispatchers.IO) {
         val sources = mutableListOf<AudioSource>()
         val durSec = (song.durationMs / 1000L).coerceAtLeast(1L)
+        val title = song.title
+        val artist = song.artist
 
-        when (song.platform) {
-            "网易云" -> {
-                val id = song.id.toLongOrNull() ?: 0L
-                if (id > 0L) {
-                    // 三个码率档：128k / 320k / 无损
-                    val levels = listOf(
-                        Triple(128000, "标准", "MP3"),
-                        Triple(320000, "高品", "MP3"),
-                        Triple(999000, "无损", "FLAC")
-                    )
-                    for ((br, quality, format) in levels) {
-                        val item = neteaseAudioSource(id, br, quality, format, durSec)
-                        if (item != null) sources.add(item)
-                    }
-                }
-            }
-            "QQ音乐" -> {
-                val mid = song.id
-                if (mid.isNotBlank()) {
-                    // M500=128k mp3 / M800=320k mp3 / F000=flac
-                    val levels = listOf(
-                        Triple("M500", "标准", "MP3"),
-                        Triple("M800", "高品", "MP3"),
-                        Triple("F000", "无损", "FLAC")
-                    )
-                    for ((prefix, quality, format) in levels) {
-                        val item = qqAudioSource(mid, prefix, quality, format, durSec)
-                        if (item != null) sources.add(item)
-                    }
-                }
+        // ===== 1. 网易云（用传入 id 或按歌名艺术家搜索） =====
+        var neteaseId = if (song.platform == "网易云") song.id.toLongOrNull() else null
+        if (neteaseId == null) {
+            neteaseId = searchSong(title, artist, song.durationMs)?.songId
+        }
+        if (neteaseId != null && neteaseId > 0L) {
+            val levels = listOf(
+                Triple(128000, "标准", "MP3"),
+                Triple(320000, "高品", "MP3"),
+                Triple(999000, "无损", "FLAC")
+            )
+            for ((br, quality, format) in levels) {
+                val item = neteaseAudioSource(neteaseId, br, quality, format, durSec)
+                if (item != null) sources.add(item)
             }
         }
+
+        // ===== 2. QQ 音乐 =====
+        var qqMid = if (song.platform == "QQ音乐") song.id else null
+        if (qqMid.isNullOrBlank()) {
+            qqMid = searchSongQQ(title, artist, song.durationMs)?.songmid
+        }
+        if (!qqMid.isNullOrBlank()) {
+            val levels = listOf(
+                Triple("M500", "标准", "MP3"),
+                Triple("M800", "高品", "MP3"),
+                Triple("F000", "无损", "FLAC")
+            )
+            for ((prefix, quality, format) in levels) {
+                val item = qqAudioSource(qqMid, prefix, quality, format, durSec)
+                if (item != null) sources.add(item)
+            }
+        }
+
+        // ===== 3. 酷狗（用传入 hash 或按歌名艺术家搜索） =====
+        val kg = parseKugouExtra(song)
+        if (kg == null) {
+            // 搜索酷狗拿 hash 族
+            try {
+                val kUrl = URL("https://songsearch.kugou.com/song_search_v2?keyword=" + URLEncoder.encode("$title $artist".trim(), "UTF-8") + "&page=1&pagesize=1")
+                val kJson = httpGet(kUrl)
+                val s = kJson?.optJSONObject("data")?.optJSONArray("lists")?.optJSONObject(0)
+                if (s != null) {
+                    kugouAudioSources(
+                        hash = s.optString("FileHash", ""),
+                        hqHash = s.optString("HQFileHash", ""),
+                        sqHash = s.optString("SQFileHash", ""),
+                        size = s.optLong("FileSize", 0L),
+                        hqSize = s.optLong("HQFileSize", 0L),
+                        sqSize = s.optLong("SQFileSize", 0L),
+                        hqBit = s.optInt("HQBitrate", 0),
+                        sqBit = s.optInt("SQBitrate", 0),
+                        durSec = durSec,
+                        sources = sources
+                    )
+                }
+            } catch (e: Exception) { }
+        } else {
+            kugouAudioSources(
+                hash = kg.hash, hqHash = kg.hqHash, sqHash = kg.sqHash,
+                size = kg.size, hqSize = kg.hqSize, sqSize = kg.sqSize,
+                hqBit = kg.hqBit, sqBit = kg.sqBit, durSec = durSec, sources = sources
+            )
+        }
+
         return@withContext sources
+    }
+
+    /** 酷狗 extra JSON 解析 */
+    private data class KugouInfo(
+        val hash: String, val hqHash: String, val sqHash: String,
+        val size: Long, val hqSize: Long, val sqSize: Long,
+        val hqBit: Int, val sqBit: Int
+    )
+
+    private fun parseKugouExtra(song: OnlineSong): KugouInfo? {
+        if (song.platform != "酷狗" || song.extra.isBlank()) return null
+        return try {
+            val j = JSONObject(song.extra)
+            KugouInfo(
+                hash = j.optString("hash", song.id),
+                hqHash = j.optString("hqHash", ""),
+                sqHash = j.optString("sqHash", ""),
+                size = j.optLong("size", 0L),
+                hqSize = j.optLong("hqSize", 0L),
+                sqSize = j.optLong("sqSize", 0L),
+                hqBit = j.optInt("hqBit", 0),
+                sqBit = j.optInt("sqBit", 0)
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 酷狗多档音源（普通 / 高品 / 无损，各调一次 getSongInfo 拿播放地址） */
+    private suspend fun kugouAudioSources(
+        hash: String, hqHash: String, sqHash: String,
+        size: Long, hqSize: Long, sqSize: Long,
+        hqBit: Int, sqBit: Int, durSec: Long,
+        sources: MutableList<AudioSource>
+    ) {
+        // 普通（约 128k）
+        if (hash.isNotBlank()) {
+            kugouAudioSource(hash, "标准", "MP3", 128000, size, durSec)?.let { sources.add(it) }
+        }
+        // 高品（320k）
+        if (hqHash.isNotBlank()) {
+            kugouAudioSource(hqHash, "高品", "MP3", if (hqBit > 0) hqBit else 320000, hqSize, durSec)?.let { sources.add(it) }
+        }
+        // 无损（flac）
+        if (sqHash.isNotBlank()) {
+            kugouAudioSource(sqHash, "无损", "FLAC", if (sqBit > 0) sqBit else 0, sqSize, durSec)?.let { sources.add(it) }
+        }
+    }
+
+    /** 酷狗单档音源（getSongInfo 拿播放 URL） */
+    private suspend fun kugouAudioSource(hash: String, quality: String, format: String, bitrate: Int, sizeBytes: Long, durSec: Long): AudioSource? {
+        return try {
+            val url = URL("https://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash=$hash")
+            val json = httpGet(url)
+            val audioUrl = json?.optString("url", null)?.takeIf { it.isNotBlank() }
+            if (audioUrl == null) {
+                AudioSource("酷狗", quality, format, bitrate, null, sizeBytes, true)
+            } else {
+                AudioSource("酷狗", quality, format, bitrate, audioUrl, sizeBytes, false)
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /** 网易云单码率音源 */

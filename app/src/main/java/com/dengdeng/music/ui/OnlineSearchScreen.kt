@@ -148,7 +148,7 @@ fun OnlineSearchScreen(
                         return@launch
                     }
                     val ok = OnlineDownloader.downloadToMusicLibrary(
-                        context, url, song.title, song.artist
+                        context, url, song.title, song.artist, source.format
                     )
                     downloadState = downloadState + (key to if (ok) "已下载 ✓" else "下载失败")
                     if (ok) onDownloaded()
@@ -399,9 +399,10 @@ private fun formatMs(ms: Long): String {
     return "%d:%02d".format(m, s)
 }
 
-/** 平台主题色：网易云红 / QQ 绿 */
+/** 平台主题色：网易云红 / QQ 绿 / 酷狗蓝 */
 private fun platformColor(platform: String): Color = when (platform) {
     "网易云" -> Color(0xFFC20C0C)
     "QQ音乐" -> Color(0xFF31C27C)
+    "酷狗" -> Color(0xFF2F7DF6)
     else -> Color(0xFF666666)
 }

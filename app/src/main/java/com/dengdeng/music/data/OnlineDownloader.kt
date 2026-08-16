@@ -99,15 +99,18 @@ object OnlineDownloader {
     }
 
     /** 下载音频到系统音乐库（Music/DDmusic/），返回是否成功 */
-    suspend fun downloadToMusicLibrary(context: Context, url: String, title: String, artist: String): Boolean =
+    suspend fun downloadToMusicLibrary(context: Context, url: String, title: String, artist: String, format: String = "mp3"): Boolean =
         withContext(Dispatchers.IO) {
             if (url.isBlank()) return@withContext false
             try {
-                val displayName = "${sanitize(title)}-${sanitize(artist)}.mp3"
+                val isFlac = format.equals("FLAC", true)
+                val ext = if (isFlac) "flac" else "mp3"
+                val mime = if (isFlac) "audio/flac" else "audio/mpeg"
+                val displayName = "${sanitize(title)}-${sanitize(artist)}.$ext"
                 val resolver = context.contentResolver
                 val values = ContentValues().apply {
                     put(MediaStore.Audio.Media.DISPLAY_NAME, displayName)
-                    put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
+                    put(MediaStore.Audio.Media.MIME_TYPE, mime)
                     put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/DDmusic")
                     put(MediaStore.Audio.Media.IS_PENDING, 1)
                 }
