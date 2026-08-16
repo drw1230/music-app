@@ -2,6 +2,7 @@ package com.dengdeng.music.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -33,10 +34,34 @@ object OnlineMetadataFetcher {
         val durationMs: Long
     )
 
+    /** 联网搜索结果（多源合并展示用） */
+    data class OnlineSong(
+        val platform: String,      // 来源平台："网易云" / "QQ音乐"
+        val id: String,            // 网易云数字 id 或 QQ songmid
+        val title: String,
+        val artist: String,
+        val album: String,
+        val artUrl: String?,
+        val durationMs: Long
+    )
+
+    /** 单曲音源条目（不同平台/品质/格式） */
+    data class AudioSource(
+        val platform: String,      // 来源平台
+        val quality: String,       // 品质：标准 / 高品 / 无损
+        val format: String,        // 格式：MP3 / FLAC / M4A
+        val bitrate: Int,          // 码率（bps），0=未知
+        val url: String?,          // 播放地址（null = VIP 受限不可用）
+        val sizeBytes: Long,       // 文件大小（0=未知，用码率估算）
+        val vip: Boolean           // 是否需 VIP
+    )
+
     // 内存缓存：搜索 key（title|artist）→ 匹配结果，避免每次切歌都重复请求
     private val matchCache = mutableMapOf<String, SongMatch>()
     // 封面缓存：key（title|artist）→ 封面 URL
     private val artworkCache = mutableMapOf<String, String>()
+    // 联网搜索结果缓存：关键词 → 结果列表
+    private val onlineSearchCache = mutableMapOf<String, List<OnlineSong>>()
 
     private fun cacheKey(title: String, artist: String) = "$title|$artist".trim().lowercase()
 
@@ -312,5 +337,190 @@ object OnlineMetadataFetcher {
         reader.close()
         conn.disconnect()
         return JSONObject(sb.toString())
+    }
+
+    // ==================== 联网搜索 + 音源查询 ====================
+
+    /**
+     * 联网搜索歌曲（网易云 + QQ 音乐多源合并）
+     * 返回按来源分组的匹配歌曲列表，供"网络搜索"界面展示
+     */
+    suspend fun searchSongsOnline(query: String, limit: Int = 15): List<OnlineSong> = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (q.isEmpty()) return@withContext emptyList()
+        val key = q.lowercase()
+        onlineSearchCache[key]?.let { return@withContext it }
+
+        val results = mutableListOf<OnlineSong>()
+
+        // —— 网易云 ——
+        try {
+            val nUrl = URL("https://music.163.com/api/search/get?s=" + URLEncoder.encode(q, "UTF-8") + "&type=1&limit=$limit")
+            val nJson = httpGet(nUrl)
+            val nSongs = nJson?.optJSONObject("result")?.optJSONArray("songs")
+            if (nSongs != null) {
+                for (i in 0 until nSongs.length()) {
+                    val s = nSongs.optJSONObject(i) ?: continue
+                    val id = s.optLong("id", 0L)
+                    if (id <= 0L) continue
+                    val title = s.optString("name", "")
+                    val artistsArr = s.optJSONArray("artists")
+                    val artist = artistsArr
+                        ?.takeIf { it.length() > 0 }
+                        ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+                    var artUrl = s.optJSONObject("album")?.optString("picUrl", null)?.takeIf { it.isNotBlank() }
+                    if (artUrl == null && artistsArr != null && artistsArr.length() > 0) {
+                        artUrl = artistsArr.optJSONObject(0)?.optString("img1v1Url", null)?.takeIf { it.isNotBlank() }
+                    }
+                    results.add(
+                        OnlineSong(
+                            platform = "网易云",
+                            id = id.toString(),
+                            title = title,
+                            artist = artist,
+                            album = s.optJSONObject("album")?.optString("name", "") ?: "",
+                            artUrl = artUrl,
+                            durationMs = s.optLong("duration", 0L)
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) { }
+
+        // —— QQ 音乐 ——
+        try {
+            val qUrl = URL("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=" + URLEncoder.encode(q, "UTF-8") + "&format=json&n=$limit&p=1")
+            val qJson = httpGetWithHeaders(qUrl)
+            val qSongs = qJson?.optJSONObject("data")?.optJSONObject("song")?.optJSONArray("list")
+            if (qSongs != null) {
+                for (i in 0 until qSongs.length()) {
+                    val s = qSongs.optJSONObject(i) ?: continue
+                    val songmid = s.optString("songmid", "")
+                    if (songmid.isBlank()) continue
+                    val singers = s.optJSONArray("singer")
+                    val artist = singers
+                        ?.takeIf { it.length() > 0 }
+                        ?.let { it.optJSONObject(0)?.optString("name", "") } ?: ""
+                    results.add(
+                        OnlineSong(
+                            platform = "QQ音乐",
+                            id = songmid,
+                            title = s.optString("songname", ""),
+                            artist = artist,
+                            album = s.optString("albumname", ""),
+                            artUrl = s.optString("albummid", "").takeIf { it.isNotBlank() }?.let { qqAlbumArtUrl(it) },
+                            durationMs = (s.optLong("interval", 0L) * 1000L)
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) { }
+
+        // 同一首歌多平台命中时去重（按 歌名|歌手）
+        val dedup = LinkedHashMap<String, OnlineSong>()
+        for (s in results) {
+            val k = "${s.title}|${s.artist}".lowercase()
+            if (!dedup.containsKey(k)) dedup[k] = s
+        }
+        val final = dedup.values.toList()
+        if (final.isNotEmpty()) onlineSearchCache[key] = final
+        return@withContext final
+    }
+
+    /**
+     * 查询单曲的所有可用音源（多平台 × 多品质）
+     * - 网易云：128k 标准 / 320k 高品 / 无损（VIP 返回 null url）
+     * - QQ 音乐：M500 mp3 128k / M800 mp3 320k / F000 flac 无损（VIP 返回空 purl）
+     */
+    suspend fun fetchAudioSources(song: OnlineSong): List<AudioSource> = withContext(Dispatchers.IO) {
+        val sources = mutableListOf<AudioSource>()
+        val durSec = (song.durationMs / 1000L).coerceAtLeast(1L)
+
+        when (song.platform) {
+            "网易云" -> {
+                val id = song.id.toLongOrNull() ?: 0L
+                if (id > 0L) {
+                    // 三个码率档：128k / 320k / 无损
+                    val levels = listOf(
+                        Triple(128000, "标准", "MP3"),
+                        Triple(320000, "高品", "MP3"),
+                        Triple(999000, "无损", "FLAC")
+                    )
+                    for ((br, quality, format) in levels) {
+                        val item = neteaseAudioSource(id, br, quality, format, durSec)
+                        if (item != null) sources.add(item)
+                    }
+                }
+            }
+            "QQ音乐" -> {
+                val mid = song.id
+                if (mid.isNotBlank()) {
+                    // M500=128k mp3 / M800=320k mp3 / F000=flac
+                    val levels = listOf(
+                        Triple("M500", "标准", "MP3"),
+                        Triple("M800", "高品", "MP3"),
+                        Triple("F000", "无损", "FLAC")
+                    )
+                    for ((prefix, quality, format) in levels) {
+                        val item = qqAudioSource(mid, prefix, quality, format, durSec)
+                        if (item != null) sources.add(item)
+                    }
+                }
+            }
+        }
+        return@withContext sources
+    }
+
+    /** 网易云单码率音源 */
+    private suspend fun neteaseAudioSource(id: Long, br: Int, quality: String, format: String, durSec: Long): AudioSource? {
+        return try {
+            val url = URL("https://music.163.com/api/song/enhance/player/url?id=$id&ids=%5B$id%5D&br=$br")
+            val json = httpGet(url)
+            val data = json?.optJSONArray("data")?.optJSONObject(0)
+            val audioUrl = data?.optString("url", null)?.takeIf { it.isNotBlank() }
+            val size = data?.optLong("size", 0L) ?: 0L
+            if (audioUrl == null) {
+                // VIP 受限：仅占位条目（url=null，vip=true）
+                AudioSource("网易云", quality, format, br, null, 0L, true)
+            } else {
+                AudioSource("网易云", quality, format, br, audioUrl, size, false)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** QQ 音乐单品质音源 */
+    private suspend fun qqAudioSource(songmid: String, prefix: String, quality: String, format: String, durSec: Long): AudioSource? {
+        return try {
+            val filename = "${prefix}${songmid}.${if (prefix == "F000") "flac" else "mp3"}"
+            val param = JSONObject()
+                .put("req_0", JSONObject()
+                    .put("module", "vkey.GetVkeyServer")
+                    .put("method", "CgiGetVkey")
+                    .put("param", JSONObject()
+                        .put("guid", "1234567890")
+                        .put("songmid", JSONArray().put(songmid))
+                        .put("songtype", JSONArray().put(0))
+                        .put("uin", "0")
+                        .put("loginflag", 1)
+                        .put("platform", "20")
+                        .put("filename", JSONArray().put(filename))))
+            val url = URL("https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=" + URLEncoder.encode(param.toString(), "UTF-8"))
+            val json = httpGetWithHeaders(url)
+            val info = json?.optJSONObject("req_0")?.optJSONObject("data")?.optJSONArray("midurlinfo")?.optJSONObject(0)
+            val purl = info?.optString("purl", "") ?: ""
+            if (purl.isBlank()) {
+                AudioSource("QQ音乐", quality, format, if (prefix == "F000") 0 else if (prefix == "M800") 320000 else 128000, null, 0L, true)
+            } else {
+                val sip = json?.optJSONObject("req_0")?.optJSONObject("data")?.optJSONArray("sip")?.optString(0) ?: ""
+                val full = if (sip.endsWith("/")) "$sip$purl" else "$sip/$purl"
+                val bitrate = if (prefix == "F000") 0 else if (prefix == "M800") 320000 else 128000
+                val size = if (prefix == "F000") 0L else bitrate / 8L * durSec
+                AudioSource("QQ音乐", quality, format, bitrate, full, size, false)
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
@@ -87,6 +88,8 @@ fun MainScreen(
     var viewingPlaylist by remember { mutableStateOf<Playlist?>(null) }
     // 正在查看的专辑（null 表示专辑列表页）
     var viewingAlbum by remember { mutableStateOf<AlbumGroup?>(null) }
+    // 联网搜索关键词（非 null 时显示网络搜索界面，覆盖曲库）
+    var onlineSearchQuery by remember { mutableStateOf<String?>(null) }
     // 待添加到歌单的歌曲 ID（非 null 时显示选择弹窗）
     var songForPlaylist by remember { mutableStateOf<Long?>(null) }
     // 右上角更多菜单
@@ -195,6 +198,12 @@ fun MainScreen(
             !hasPermission -> PermissionHint(Modifier.padding(padding))
             viewModel.isLoading -> LoadingView(Modifier.padding(padding))
             viewModel.songs.isEmpty() -> EmptyView(Modifier.padding(padding))
+            // 联网搜索界面（覆盖整个曲库区，含 Tab 栏）
+            onlineSearchQuery != null -> {
+                val q = onlineSearchQuery!!
+                BackHandler { onlineSearchQuery = null }
+                OnlineSearchScreen(query = q, onBack = { onlineSearchQuery = null })
+            }
             else -> {
                 // Tab 栏 + 内容
                 Column(Modifier.padding(padding)) {
@@ -281,7 +290,8 @@ fun MainScreen(
                         else -> SongList(
                             viewModel = viewModel,
                             onAddToPlaylist = { songForPlaylist = it },
-                            onDeleteSongs = onDeleteSongs
+                            onDeleteSongs = onDeleteSongs,
+                            onOnlineSearch = { q -> onlineSearchQuery = q }
                         )
                     }
                 }
@@ -439,12 +449,13 @@ private fun PlaylistDetailHeader(
     }
 }
 
-/** 全部歌曲列表（带搜索框 + 智能联想） */
+/** 全部歌曲列表（带搜索框 + 智能联想 + 联网搜索入口） */
 @Composable
 private fun SongList(
     viewModel: MusicViewModel,
     onAddToPlaylist: (Long) -> Unit,
-    onDeleteSongs: (List<android.net.Uri>) -> Unit
+    onDeleteSongs: (List<android.net.Uri>) -> Unit,
+    onOnlineSearch: (String) -> Unit
 ) {
     val songs = viewModel.filteredSongs
     val totalDuration = songs.sumOf { it.durationMs }
@@ -500,6 +511,71 @@ private fun SongList(
                             }
                         )
                     }
+                    // 联网搜索入口
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOnlineSearch(query.trim()) }
+                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Language,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            buildAnnotatedString {
+                                append("在网络上搜索「")
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)) {
+                                    append(query.trim())
+                                }
+                                append("」")
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "联网",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                }
+            }
+        }
+        // 无本地联想时也提供联网搜索入口
+        if (query.isNotBlank() && suggestOpen && suggestions.isEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOnlineSearch(query.trim()) }
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        buildAnnotatedString {
+                            append("没有本地匹配，在网络上搜索「")
+                            withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)) {
+                                append(query.trim())
+                            }
+                            append("」")
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
         }
