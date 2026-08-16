@@ -158,6 +158,118 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 .sortedBy { it.name.lowercase() }
         }
 
+    // ==================== 均衡器 / 音效 ====================
+
+    private var equalizer: android.media.audiofx.Equalizer? = null
+    private var bassBoost: android.media.audiofx.BassBoost? = null
+    private var virtualizer: android.media.audiofx.Virtualizer? = null
+
+    /** 均衡器是否可用（设备支持） */
+    var eqAvailable by mutableStateOf(false)
+    /** 均衡器开关 */
+    var eqEnabled by mutableStateOf(false)
+    /** 当前预设索引 */
+    var eqPreset by mutableStateOf(0)
+    /** 预设名列表 */
+    var eqPresets by mutableStateOf<List<String>>(emptyList())
+    /** 频段中心频率（Hz） */
+    var eqFrequencies by mutableStateOf<List<Int>>(emptyList())
+    /** 频段增益（mB，-1500..1500） */
+    var eqLevels by mutableStateOf<Map<Int, Int>>(emptyMap())
+    /** 低音增强开关 + 强度（0..1000） */
+    var bassEnabled by mutableStateOf(false)
+    var bassStrength by mutableStateOf(500)
+    /** 环绕（虚拟器）开关 */
+    var virtualizerEnabled by mutableStateOf(false)
+
+    /** 初始化均衡器（附加到播放器 audioSession，同进程从 PlaybackService 读取） */
+    fun initEqualizer() {
+        val sessionId = PlaybackService.currentAudioSessionId
+        if (sessionId <= 0) return
+        try {
+            equalizer?.release()
+            equalizer = android.media.audiofx.Equalizer(0, sessionId).also { eq ->
+                eqFrequencies = (0 until eq.numberOfBands).map { eq.getCenterFreq(it.toShort()) }
+                eqPresets = (0 until eq.numberOfPresets).map { eq.getPresetName(it.toShort()) }
+                eqPreset = eq.currentPreset.toInt()
+                eqLevels = (0 until eq.numberOfBands).associateWith { eq.getBandLevel(it.toShort()).toInt() }
+            }
+            bassBoost?.release()
+            bassBoost = android.media.audiofx.BassBoost(0, sessionId).also {
+                bassStrength = it.roundedStrength.toInt()
+                bassEnabled = it.enabled
+            }
+            virtualizer?.release()
+            virtualizer = android.media.audiofx.Virtualizer(0, sessionId).also {
+                virtualizerEnabled = it.enabled
+            }
+            eqEnabled = equalizer?.enabled ?: false
+            eqAvailable = true
+        } catch (e: Exception) {
+            eqAvailable = false
+        }
+    }
+
+    /** 切换均衡器开关 */
+    fun applyEqEnabled(on: Boolean) {
+        eqEnabled = on
+        runCatching { equalizer?.enabled = on }
+    }
+
+    /** 选择预设 */
+    fun applyEqPreset(index: Int) {
+        eqPreset = index
+        runCatching {
+            equalizer?.usePreset(index.toShort())
+            val eq = equalizer ?: return
+            eqLevels = (0 until eq.numberOfBands).associateWith { eq.getBandLevel(it.toShort()).toInt() }
+        }
+    }
+
+    /** 设置某频段增益（mB） */
+    fun setEqBandLevel(band: Int, levelMb: Int) {
+        runCatching { equalizer?.setBandLevel(band.toShort(), levelMb.toShort()) }
+        eqLevels = eqLevels + (band to levelMb)
+    }
+
+    /** 重置均衡器（全部频段归零） */
+    fun resetEq() {
+        runCatching {
+            val eq = equalizer ?: return
+            for (b in 0 until eq.numberOfBands) eq.setBandLevel(b.toShort(), 0.toShort())
+            eqLevels = (0 until eq.numberOfBands).associateWith { 0 }
+        }
+    }
+
+    /** 低音增强开关 */
+    fun applyBassEnabled(on: Boolean) {
+        bassEnabled = on
+        runCatching {
+            bassBoost?.enabled = on
+            if (on) bassBoost?.setStrength(bassStrength.toShort())
+        }
+    }
+
+    /** 低音增强强度（0..1000） */
+    fun applyBassStrength(strength: Int) {
+        bassStrength = strength
+        runCatching {
+            bassBoost?.setStrength(strength.toShort())
+            if (!(bassBoost?.enabled ?: false)) bassBoost?.enabled = true
+        }
+    }
+
+    /** 环绕开关 */
+    fun applyVirtualizerEnabled(on: Boolean) {
+        virtualizerEnabled = on
+        runCatching { virtualizer?.enabled = on }
+    }
+
+    /** 均衡器恢复在线试听（session 变化时重新附加） */
+    fun reattachEffects() {
+        initEqualizer()
+    }
+
     // ==================== 播放历史 ====================
 
     /** 播放历史：歌曲 ID -> 播放次数（LinkedHashMap 保持顺序） */
@@ -258,6 +370,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             controller?.addListener(playerListener)
             // 启动进度轮询（始终运行：播放/暂停/拖动都实时刷新位置，保证歌词与进度同步）
             updatePositionPolling()
+            // 初始化均衡器（附加到播放器的 audioSession）
+            initEqualizer()
             // 恢复循环/乱序模式 + 尝试恢复上次播放
             viewModelScope.launch {
                 runCatching {
@@ -340,7 +454,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             id = -1L,
             title = title,
             artist = artist,
-            album = "在线音乐",
+            album = "在线试听",
             uri = url,
             albumArtUri = artUrl,
             durationMs = durationMs
@@ -348,6 +462,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val items = PlaybackService.buildMediaItems(listOf(info))
         activeQueue = emptyList()
         currentIndex = 0
+        // 记录在线试听状态（迷你条显示用；本地播放时清除）
+        onlineNowPlaying = Song(
+            id = -1L,
+            title = title,
+            artist = artist,
+            album = "在线试听",
+            durationMs = durationMs,
+            uri = android.net.Uri.parse(url),
+            albumArtUri = artUrl?.let { android.net.Uri.parse(it) }
+        )
         ctrl.setMediaItems(items, 0, 0L)
         ctrl.prepare()
         ctrl.play()
@@ -582,6 +706,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun playSongs(songs: List<Song>, startIndex: Int = 0) {
         if (songs.isEmpty()) return
         val ctrl = controller ?: return
+        onlineNowPlaying = null
         activeQueue = songs
         val songInfos = songs.map { song ->
             PlaybackService.SongInfo(
@@ -655,6 +780,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val songList = filteredSongs
         if (songList.isEmpty() || index !in songList.indices) return
         val ctrl = controller ?: return
+        onlineNowPlaying = null
         activeQueue = songList
 
         val songInfos = songList.map { song ->
@@ -735,6 +861,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** 当前播放队列（playSong/playSongs 时记录，供 currentSong 精确取歌） */
     private var activeQueue: List<Song> = emptyList()
 
+    /** 在线试听中的歌曲（playOnline 时设置，本地播放时清除；迷你条用它显示在线试听内容） */
+    var onlineNowPlaying by mutableStateOf<Song?>(null)
+        private set
+
+    /** 当前显示的歌曲（在线试听优先，否则本地播放队列） */
+    fun nowPlayingSong(): Song? = onlineNowPlaying ?: currentSong()
+
     /** 获取当前播放歌曲信息（供 UI 显示）—— 从实际播放队列取，避免索引错位 */
     fun currentSong(): Song? {
         val idx = currentIndex
@@ -745,6 +878,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         positionJob?.cancel()
         positionJob = null
+        runCatching { equalizer?.release() }
+        runCatching { bassBoost?.release() }
+        runCatching { virtualizer?.release() }
         controller?.release()
         controller = null
     }

@@ -28,6 +28,8 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         player.repeatMode = Player.REPEAT_MODE_OFF
+        // 暴露 audioSessionId 给同进程的 UI 层（均衡器附加用）
+        currentAudioSessionId = player.audioSessionId
 
         mediaSession = MediaSession.Builder(this, player)
             .build()
@@ -40,6 +42,11 @@ class PlaybackService : MediaSessionService() {
 
     /** 便捷方法：让服务在后台播放一组歌曲（由 ViewModel 通过 Controller 调用） */
     companion object {
+        /** 当前播放器的 audioSessionId（同进程共享，供 UI 层附加均衡器等音效） */
+        @Volatile
+        var currentAudioSessionId: Int = 0
+            private set
+
         /**
          * 把 Song 列表转换成 MediaItem 列表
          * 通知栏显示的歌名/艺术家/封面都来自 MediaItem 的 metadata

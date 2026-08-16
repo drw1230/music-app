@@ -49,39 +49,6 @@ fun OnlineSearchScreen(
     var selectedSong by remember { mutableStateOf<OnlineSong?>(null) }
     // 下载状态：key=平台|品质 → 状态文案
     var downloadState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    // 批量下载状态（null=未开始）
-    var batchState by remember(query) { mutableStateOf<String?>(null) }
-
-    /** 批量下载：搜索结果前 10 首，自动选全网最高音质 */
-    fun startBatchDownload() {
-        if (batchState?.contains("下载中") == true) return
-        val targets = results.take(10)
-        if (targets.isEmpty()) return
-        scope.launch {
-            val qualityOrder = mapOf("无损" to 0, "高品" to 1, "标准" to 2)
-            var done = 0
-            var ok = 0
-            batchState = "批量下载中 0/${targets.size}…"
-            for (song in targets) {
-                try {
-                    val sources = OnlineMetadataFetcher.fetchAudioSources(song)
-                    val best = sources
-                        .filter { it.url != null }
-                        .minByOrNull { qualityOrder[it.quality] ?: 3 }
-                    if (best != null) {
-                        val success = OnlineDownloader.downloadToMusicLibrary(
-                            context, best.url!!, song.title, song.artist, best.format
-                        )
-                        if (success) ok++
-                    }
-                } catch (e: Exception) { }
-                done++
-                batchState = "批量下载中 $done/${targets.size}…"
-            }
-            batchState = "已下载 $ok 首"
-            if (ok > 0) onDownloaded()
-        }
-    }
 
     LaunchedEffect(query) {
         loading = true
@@ -115,18 +82,6 @@ fun OnlineSearchScreen(
                 )
             }
             if (!loading && results.isNotEmpty()) {
-                // 批量下载按钮（最高音质优先，前 10 首）
-                Text(
-                    batchState ?: "批量下载",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (batchState == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = if (batchState == null) 0.12f else 0.06f))
-                        .clickable(enabled = batchState?.contains("下载中") != true) { startBatchDownload() }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                )
-                Spacer(Modifier.width(10.dp))
                 // 来源统计
                 val platforms = results.map { it.platform }.distinct()
                 Text(

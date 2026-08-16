@@ -193,8 +193,14 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            if (viewModel.currentSong() != null) {
-                MiniPlayerBar(viewModel, onClick = { showPlayer = true })
+            if (viewModel.nowPlayingSong() != null) {
+                MiniPlayerBar(
+                    viewModel,
+                    onClick = {
+                        // 在线试听不进全屏播放界面（仅迷你条试听）
+                        if (viewModel.onlineNowPlaying == null) showPlayer = true
+                    }
+                )
             }
         }
     ) { padding ->
@@ -210,10 +216,10 @@ fun MainScreen(
                         onDownloaded = { viewModel.scanMusic() },
                         onPlay = { song, source ->
                             source.url?.let { url ->
+                                // 在线试听：走迷你条播放（不进入全屏播放界面）
                                 viewModel.playOnline(
                                     song.title, song.artist, url, song.artUrl, song.durationMs
                                 )
-                                showPlayer = true
                             }
                         }
                     )
@@ -1542,7 +1548,8 @@ private fun EqualizerIcon(tint: Color) {
 /** 底部迷你播放条：小封面 + 歌名 + 控制按钮 + 可拖动进度条 */
 @Composable
 private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
-    val song = viewModel.currentSong() ?: return
+    val song = viewModel.nowPlayingSong() ?: return
+    val isOnline = viewModel.onlineNowPlaying != null
 
     Surface(
         tonalElevation = 3.dp,
@@ -1598,12 +1605,14 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                     )
                 }
 
-                IconButton(onClick = { viewModel.previous() }) {
-                    Icon(
-                        Icons.Default.SkipPrevious,
-                        contentDescription = "上一首",
-                        modifier = Modifier.size(22.dp)
-                    )
+                if (!isOnline) {
+                    IconButton(onClick = { viewModel.previous() }) {
+                        Icon(
+                            Icons.Default.SkipPrevious,
+                            contentDescription = "上一首",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
                 IconButton(onClick = { viewModel.togglePlayPause() }) {
                     Icon(
@@ -1612,12 +1621,14 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
                         modifier = Modifier.size(28.dp)
                     )
                 }
-                IconButton(onClick = { viewModel.next() }) {
-                    Icon(
-                        Icons.Default.SkipNext,
-                        contentDescription = "下一首",
-                        modifier = Modifier.size(22.dp)
-                    )
+                if (!isOnline) {
+                    IconButton(onClick = { viewModel.next() }) {
+                        Icon(
+                            Icons.Default.SkipNext,
+                            contentDescription = "下一首",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
         }

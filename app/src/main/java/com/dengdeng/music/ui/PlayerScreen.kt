@@ -19,6 +19,7 @@ import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -101,6 +102,7 @@ fun PlayerScreen(
     var lyricRefreshToken by remember { mutableStateOf(0) }
     var showLyricAdjust by remember { mutableStateOf(false) }
     var showEditTag by remember { mutableStateOf(false) }
+    var showEqualizer by remember { mutableStateOf(false) }
     var coverCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
     // 在线下载状态（null=不显示弹窗）
     var downloadState by remember { mutableStateOf<String?>(null) }
@@ -306,6 +308,13 @@ fun PlayerScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = { Text("均衡器") },
+                            onClick = {
+                                showSongMenu = false
+                                showEqualizer = true
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("下载歌曲") },
                             onClick = {
                                 showSongMenu = false
@@ -454,6 +463,14 @@ fun PlayerScreen(
                     showEditTag = false
                 },
                 onDismiss = { showEditTag = false }
+            )
+        }
+
+        // 均衡器弹窗
+        if (showEqualizer) {
+            EqualizerDialog(
+                viewModel = viewModel,
+                onDismiss = { showEqualizer = false }
             )
         }
 
@@ -646,6 +663,140 @@ private fun EditTagDialog(
 private fun formatLyricOffset(ms: Long): String {
     val sec = ms / 1000.0
     return if (ms >= 0) "+%.1fs".format(sec) else "%.1fs".format(sec)
+}
+
+/** 均衡器弹窗：预设 + 频段滑块 + 低音增强 + 环绕声 */
+@Composable
+private fun EqualizerDialog(
+    viewModel: MusicViewModel,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("均衡器") },
+        text = {
+            if (!viewModel.eqAvailable) {
+                Text(
+                    "当前设备不支持均衡器",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 16.dp)
+                )
+            } else {
+                Column(
+                    Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 4.dp)
+                ) {
+                    // 总开关
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("启用均衡器", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = viewModel.eqEnabled,
+                            onCheckedChange = { viewModel.applyEqEnabled(it) }
+                        )
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+
+                    // 预设选择
+                    Text("预设", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        viewModel.eqPresets.forEachIndexed { index, name ->
+                            val selected = viewModel.eqPreset == index
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                    .clickable { viewModel.applyEqPreset(index) }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+
+                    // 频段滑块
+                    Text("频段调节", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    viewModel.eqFrequencies.forEachIndexed { band, freqHz ->
+                        val level = viewModel.eqLevels[band] ?: 0
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (freqHz >= 1000) "${freqHz / 1000}k" else "$freqHz",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(44.dp)
+                            )
+                            Slider(
+                                value = level.toFloat(),
+                                onValueChange = { viewModel.setEqBandLevel(band, it.roundToInt()) },
+                                valueRange = -1500f..1500f,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "%.1f".format(level / 100.0),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(36.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+
+                    // 低音增强
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("低音增强", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = viewModel.bassEnabled,
+                            onCheckedChange = { viewModel.applyBassEnabled(it) }
+                        )
+                    }
+                    if (viewModel.bassEnabled) {
+                        Slider(
+                            value = viewModel.bassStrength.toFloat(),
+                            onValueChange = { viewModel.applyBassStrength(it.toInt()) },
+                            valueRange = 0f..1000f
+                        )
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                    // 环绕声
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("环绕声", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = viewModel.virtualizerEnabled,
+                            onCheckedChange = { viewModel.applyVirtualizerEnabled(it) }
+                        )
+                    }
+
+                    // 重置
+                    TextButton(
+                        onClick = { viewModel.resetEq() },
+                        modifier = Modifier.align(Alignment.End)
+                    ) { Text("重置全部") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("完成") }
+        }
+    )
 }
 
 /** 旋转封面：播放时匀速旋转 + 底部光晕，暂停时静止 */
