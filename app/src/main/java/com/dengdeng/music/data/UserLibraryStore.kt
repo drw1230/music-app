@@ -149,9 +149,9 @@ object UserLibraryStore {
 
     // ==================== 排序方式记忆 ====================
 
-    /** 上次使用的排序方式（默认 0=按歌名） */
+    /** 上次使用的排序方式（默认 3=最近添加，用户偏好） */
     suspend fun getSortMode(context: Context): Int =
-        context.dataStore.data.map { prefs -> prefs[KEY_SORT_MODE] ?: 0 }.first()
+        context.dataStore.data.map { prefs -> prefs[KEY_SORT_MODE] ?: 3 }.first()
 
     suspend fun saveSortMode(context: Context, mode: Int) {
         context.dataStore.edit { prefs -> prefs[KEY_SORT_MODE] = mode }
