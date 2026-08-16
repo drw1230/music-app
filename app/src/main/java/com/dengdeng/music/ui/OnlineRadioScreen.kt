@@ -24,6 +24,9 @@ import com.dengdeng.music.data.OnlineDownloader
 import com.dengdeng.music.data.OnlineMetadataFetcher
 import com.dengdeng.music.data.OnlineMetadataFetcher.OnlineSong
 import com.dengdeng.music.data.Song
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -73,33 +76,32 @@ fun OnlineRadioScreen(
         }
     }
 
-    /** 播放电台（逐首解析 URL → 在线流队列） */
+    /** 播放电台（并行解析 URL → 在线流队列，几十首秒级完成） */
     fun playRadio() {
         if (songs.isEmpty() || radioState != null) return
         scope.launch {
             val targets = songs
-            radioState = "正在准备电台 0/${targets.size}…"
-            val queue = mutableListOf<Song>()
-            for ((i, s) in targets.withIndex()) {
-                val url = OnlineMetadataFetcher.resolveOnlineUrl(s)
-                if (url != null) {
-                    queue.add(
-                        Song(
-                            id = -1L,
-                            title = s.title,
-                            artist = s.artist,
-                            album = "每日电台",
-                            durationMs = s.durationMs,
-                            uri = android.net.Uri.parse(url),
-                            albumArtUri = s.artUrl?.let { android.net.Uri.parse(it) }
-                        )
-                    )
-                }
-                radioState = "正在准备电台 ${i + 1}/${targets.size}…"
+            radioState = "正在准备电台（并行解析音源）…"
+            val queue = coroutineScope {
+                targets.map { s -> async { s to OnlineMetadataFetcher.resolveOnlineUrl(s) } }
+                    .awaitAll()
+                    .mapNotNull { (s, url) ->
+                        url?.let {
+                            Song(
+                                id = -1L,
+                                title = s.title,
+                                artist = s.artist,
+                                album = "每日电台",
+                                durationMs = s.durationMs,
+                                uri = android.net.Uri.parse(it),
+                                albumArtUri = s.artUrl?.let { u -> android.net.Uri.parse(u) }
+                            )
+                        }
+                    }
             }
             radioState = null
             if (queue.isNotEmpty()) {
-                viewModel.playOnlineQueue(queue)
+                viewModel.playOnlineQueue(queue, isRadio = true)
             } else {
                 radioState = "暂无可用音源"
             }
@@ -115,6 +117,15 @@ fun OnlineRadioScreen(
         if (songs.isNotEmpty() && !autoPlayed) {
             autoPlayed = true
             playRadio()
+        }
+    }
+
+    // 电台整单播完（40 首都听完）→ 自动刷新榜单（过滤已跳过歌）并继续播放新歌
+    LaunchedEffect(viewModel.radioQueueEnded) {
+        if (viewModel.radioQueueEnded) {
+            viewModel.radioQueueEnded = false
+            autoPlayed = false   // 允许加载完成后自动开始播放新歌
+            loadRadio(true)
         }
     }
 

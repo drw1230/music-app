@@ -541,6 +541,9 @@ private fun SongList(
         // 搜索历史区（搜索框为空时显示，点击可再次搜索）
         if (query.isBlank() && viewModel.searchHistory.isNotEmpty()) {
             item {
+                val allHistory = viewModel.searchHistory
+                // 默认只显示一排（前 5 个），点击"历史 N"展开全部
+                var historyExpanded by remember { mutableStateOf(false) }
                 Column(Modifier.padding(horizontal = 20.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
@@ -561,7 +564,8 @@ private fun SongList(
                     }
                     // 历史词标签流式排列
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        viewModel.searchHistory.forEach { word ->
+                        val visible = if (historyExpanded) allHistory else allHistory.take(5)
+                        visible.forEach { word ->
                             Text(
                                 text = word,
                                 style = MaterialTheme.typography.bodyMedium,
@@ -573,6 +577,31 @@ private fun SongList(
                                         query = word
                                         suggestOpen = true
                                     }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                        // 最边上的"历史"入口：未展开时显示数量，点击展开全部；展开后变"收起"
+                        if (!historyExpanded && allHistory.size > 5) {
+                            Text(
+                                text = "历史 ${allHistory.size}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                    .clickable { historyExpanded = true }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        } else if (historyExpanded) {
+                            Text(
+                                text = "收起",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                    .clickable { historyExpanded = false }
                                     .padding(horizontal = 14.dp, vertical = 6.dp)
                             )
                         }

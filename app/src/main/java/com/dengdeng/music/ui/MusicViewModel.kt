@@ -466,7 +466,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             activeQueue = songs
             ctrl.setMediaItems(items, index, lp.positionMs.coerceAtLeast(0L))
             ctrl.prepare()
-            if (lp.isPlaying) ctrl.play()
+            // 重启后始终保持暂停，不自动播放（无论上次关闭时是播放还是暂停）
+            ctrl.pause()
         } catch (e: Exception) { }
     }
 
@@ -484,8 +485,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         playOnlineQueue(listOf(song))
     }
 
-    /** 在线队列播放（电台/批量：多首在线流，可切歌） */
-    fun playOnlineQueue(songs: List<Song>) {
+    /** 在线队列播放（电台/批量：多首在线流，可切歌）；isRadio=true 表示电台队列（播完触发自动刷新） */
+    fun playOnlineQueue(songs: List<Song>, isRadio: Boolean = false) {
         if (songs.isEmpty()) return
         val ctrl = controller ?: return
         val infos = songs.map { song ->
@@ -502,6 +503,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val items = PlaybackService.buildMediaItems(infos)
         activeQueue = emptyList()
         onlineQueue = songs
+        radioMode = isRadio
         currentIndex = 0
         ctrl.setMediaItems(items, 0, 0L)
         ctrl.prepare()
@@ -576,6 +578,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             syncDuration()
+            // 电台队列整单播完（STATE_ENDED）→ 标记，电台界面自动刷新新歌继续播
+            if (playbackState == Player.STATE_ENDED && radioMode && onlineQueue.isNotEmpty()) {
+                radioQueueEnded = true
+            }
         }
     }
 
@@ -819,6 +825,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (songList.isEmpty() || index !in songList.indices) return
         val ctrl = controller ?: return
         onlineQueue = emptyList()
+        radioMode = false
         activeQueue = songList
 
         val songInfos = songList.map { song ->
@@ -905,6 +912,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 当前是否在线播放 */
     val isOnlinePlaying: Boolean get() = onlineQueue.isNotEmpty()
+
+    /** 当前队列是否为电台队列（播完触发自动刷新） */
+    var radioMode by mutableStateOf(false)
+        private set
+
+    /** 电台队列播放完标志（OnlineRadioScreen 消费后置 false 并自动刷新重播） */
+    var radioQueueEnded by mutableStateOf(false)
 
     /** 当前显示的歌曲（在线队列优先，否则本地播放队列） */
     fun nowPlayingSong(): Song? =

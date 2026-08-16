@@ -1,6 +1,9 @@
 package com.dengdeng.music.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -63,6 +66,8 @@ object OnlineMetadataFetcher {
     private val artworkCache = mutableMapOf<String, String>()
     // 联网搜索结果缓存：关键词 → 结果列表
     private val onlineSearchCache = mutableMapOf<String, List<OnlineSong>>()
+    // 音源聚合结果缓存：key=平台|id → (时间戳, 音源列表)，5 分钟内不重复查询
+    private val sourceCache = mutableMapOf<String, Pair<Long, List<AudioSource>>>()
 
     private fun cacheKey(title: String, artist: String) = "$title|$artist".trim().lowercase()
 
@@ -296,8 +301,8 @@ object OnlineMetadataFetcher {
         return try {
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 8000
-                readTimeout = 8000
+                connectTimeout = 6000
+                readTimeout = 6000
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 setRequestProperty("Accept", "application/json")
             }
@@ -312,8 +317,8 @@ object OnlineMetadataFetcher {
         return try {
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 8000
-                readTimeout = 8000
+                connectTimeout = 6000
+                readTimeout = 6000
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 setRequestProperty("Referer", "https://y.qq.com")
                 setRequestProperty("Accept", "application/json")
@@ -472,79 +477,82 @@ object OnlineMetadataFetcher {
      * - 网易云：128k 标准 / 320k 高品 / 无损（VIP 返回 null url）
      * - QQ 音乐：M500 mp3 128k / M800 mp3 320k / F000 flac 无损（VIP 返回空 purl）
      * - 酷狗：普通 / 320k 高品 / 无损 flac（免费歌曲多，Privilege=0 可直接下载）
+     * 三平台 + 各品质档并行请求，结果内存缓存 5 分钟（避免重复查询卡弹窗）
      */
     suspend fun fetchAudioSources(song: OnlineSong): List<AudioSource> = withContext(Dispatchers.IO) {
-        val sources = mutableListOf<AudioSource>()
+        val cacheKey = "${song.platform}|${song.id}"
+        sourceCache[cacheKey]?.let { (t, v) ->
+            if (System.currentTimeMillis() - t < 300_000L) return@withContext v
+            sourceCache.remove(cacheKey)
+        }
         val durSec = (song.durationMs / 1000L).coerceAtLeast(1L)
         val title = song.title
         val artist = song.artist
 
-        // ===== 1. 网易云（用传入 id 或按歌名艺术家搜索） =====
-        var neteaseId = if (song.platform == "网易云") song.id.toLongOrNull() else null
-        if (neteaseId == null) {
-            neteaseId = searchSong(title, artist, song.durationMs)?.songId
-        }
-        if (neteaseId != null && neteaseId > 0L) {
-            val levels = listOf(
-                Triple(128000, "标准", "MP3"),
-                Triple(320000, "高品", "MP3"),
-                Triple(999000, "无损", "FLAC")
-            )
-            for ((br, quality, format) in levels) {
-                val item = neteaseAudioSource(neteaseId, br, quality, format, durSec)
-                if (item != null) sources.add(item)
+        val sources = coroutineScope {
+            // ===== 1. 网易云 =====
+            val netease = async {
+                val nid = if (song.platform == "网易云") song.id.toLongOrNull() else null
+                val id = nid ?: searchSong(title, artist, song.durationMs)?.songId
+                if (id == null || id <= 0L) emptyList()
+                else listOf(
+                    Triple(128000, "标准", "MP3"),
+                    Triple(320000, "高品", "MP3"),
+                    Triple(999000, "无损", "FLAC")
+                ).map { (br, quality, format) -> async { neteaseAudioSource(id, br, quality, format, durSec) } }
+                    .awaitAll().filterNotNull()
             }
-        }
 
-        // ===== 2. QQ 音乐 =====
-        var qqMid = if (song.platform == "QQ音乐") song.id else null
-        if (qqMid.isNullOrBlank()) {
-            qqMid = searchSongQQ(title, artist, song.durationMs)?.songmid
-        }
-        if (!qqMid.isNullOrBlank()) {
-            val levels = listOf(
-                Triple("M500", "标准", "MP3"),
-                Triple("M800", "高品", "MP3"),
-                Triple("F000", "无损", "FLAC")
-            )
-            for ((prefix, quality, format) in levels) {
-                val item = qqAudioSource(qqMid, prefix, quality, format, durSec)
-                if (item != null) sources.add(item)
+            // ===== 2. QQ 音乐 =====
+            val qq = async {
+                val mid = if (song.platform == "QQ音乐") song.id else null
+                val songmid = mid ?: searchSongQQ(title, artist, song.durationMs)?.songmid
+                if (songmid.isNullOrBlank()) emptyList()
+                else listOf(
+                    Triple("M500", "标准", "MP3"),
+                    Triple("M800", "高品", "MP3"),
+                    Triple("F000", "无损", "FLAC")
+                ).map { (prefix, quality, format) -> async { qqAudioSource(songmid, prefix, quality, format, durSec) } }
+                    .awaitAll().filterNotNull()
             }
-        }
 
-        // ===== 3. 酷狗（用传入 hash 或按歌名艺术家搜索） =====
-        val kg = parseKugouExtra(song)
-        if (kg == null) {
-            // 搜索酷狗拿 hash 族
-            try {
-                val kUrl = URL("https://songsearch.kugou.com/song_search_v2?keyword=" + URLEncoder.encode("$title $artist".trim(), "UTF-8") + "&page=1&pagesize=1")
-                val kJson = httpGet(kUrl)
-                val s = kJson?.optJSONObject("data")?.optJSONArray("lists")?.optJSONObject(0)
-                if (s != null) {
-                    kugouAudioSources(
-                        hash = s.optString("FileHash", ""),
-                        hqHash = s.optString("HQFileHash", ""),
-                        sqHash = s.optString("SQFileHash", ""),
-                        size = s.optLong("FileSize", 0L),
-                        hqSize = s.optLong("HQFileSize", 0L),
-                        sqSize = s.optLong("SQFileSize", 0L),
-                        hqBit = s.optInt("HQBitrate", 0),
-                        sqBit = s.optInt("SQBitrate", 0),
-                        durSec = durSec,
-                        sources = sources
-                    )
+            // ===== 3. 酷狗 =====
+            val kugou = async {
+                val kg = parseKugouExtra(song)
+                if (kg != null) {
+                    val out = mutableListOf<AudioSource>()
+                    kugouAudioSources(kg.hash, kg.hqHash, kg.sqHash, kg.size, kg.hqSize, kg.sqSize, kg.hqBit, kg.sqBit, durSec, out)
+                    out.toList()
+                } else {
+                    try {
+                        val kUrl = URL("https://songsearch.kugou.com/song_search_v2?keyword=" + URLEncoder.encode("$title $artist".trim(), "UTF-8") + "&page=1&pagesize=1")
+                        val kJson = httpGet(kUrl)
+                        val s = kJson?.optJSONObject("data")?.optJSONArray("lists")?.optJSONObject(0)
+                        if (s != null) {
+                            val out = mutableListOf<AudioSource>()
+                            kugouAudioSources(
+                                hash = s.optString("FileHash", ""),
+                                hqHash = s.optString("HQFileHash", ""),
+                                sqHash = s.optString("SQFileHash", ""),
+                                size = s.optLong("FileSize", 0L),
+                                hqSize = s.optLong("HQFileSize", 0L),
+                                sqSize = s.optLong("SQFileSize", 0L),
+                                hqBit = s.optInt("HQBitrate", 0),
+                                sqBit = s.optInt("SQBitrate", 0),
+                                durSec = durSec,
+                                sources = out
+                            )
+                            out.toList()
+                        } else emptyList()
+                    } catch (e: Exception) { emptyList() }
                 }
-            } catch (e: Exception) { }
-        } else {
-            kugouAudioSources(
-                hash = kg.hash, hqHash = kg.hqHash, sqHash = kg.sqHash,
-                size = kg.size, hqSize = kg.hqSize, sqSize = kg.sqSize,
-                hqBit = kg.hqBit, sqBit = kg.sqBit, durSec = durSec, sources = sources
-            )
+            }
+
+            listOf(netease, qq, kugou).awaitAll().flatten()
         }
 
-        return@withContext sources
+        sourceCache[cacheKey] = System.currentTimeMillis() to sources
+        sources
     }
 
     /** 酷狗 extra JSON 解析 */
@@ -573,25 +581,21 @@ object OnlineMetadataFetcher {
         }
     }
 
-    /** 酷狗多档音源（普通 / 高品 / 无损，各调一次 getSongInfo 拿播放地址） */
+    /** 酷狗多档音源（普通 / 高品 / 无损，各调一次 getSongInfo 拿播放地址，并行请求） */
     private suspend fun kugouAudioSources(
         hash: String, hqHash: String, sqHash: String,
         size: Long, hqSize: Long, sqSize: Long,
         hqBit: Int, sqBit: Int, durSec: Long,
         sources: MutableList<AudioSource>
     ) {
-        // 普通（约 128k）
-        if (hash.isNotBlank()) {
-            kugouAudioSource(hash, "标准", "MP3", 128000, size, durSec)?.let { sources.add(it) }
+        val items = coroutineScope {
+            listOfNotNull(
+                hash.takeIf { it.isNotBlank() }?.let { async { kugouAudioSource(it, "标准", "MP3", 128000, size, durSec) } },
+                hqHash.takeIf { it.isNotBlank() }?.let { async { kugouAudioSource(it, "高品", "MP3", if (hqBit > 0) hqBit else 320000, hqSize, durSec) } },
+                sqHash.takeIf { it.isNotBlank() }?.let { async { kugouAudioSource(it, "无损", "FLAC", if (sqBit > 0) sqBit else 0, sqSize, durSec) } }
+            ).awaitAll().filterNotNull()
         }
-        // 高品（320k）
-        if (hqHash.isNotBlank()) {
-            kugouAudioSource(hqHash, "高品", "MP3", if (hqBit > 0) hqBit else 320000, hqSize, durSec)?.let { sources.add(it) }
-        }
-        // 无损（flac）
-        if (sqHash.isNotBlank()) {
-            kugouAudioSource(sqHash, "无损", "FLAC", if (sqBit > 0) sqBit else 0, sqSize, durSec)?.let { sources.add(it) }
-        }
+        sources.addAll(items)
     }
 
     /** 酷狗单档音源（getSongInfo 拿播放 URL） */
