@@ -1936,7 +1936,7 @@ private fun AboutDialog(onDismiss: () -> Unit) {
             ) {
                 Text("DDmusic", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "版本 1.0.2",
+                    "版本 1.0.3",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
