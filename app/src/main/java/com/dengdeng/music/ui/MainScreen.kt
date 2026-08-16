@@ -115,8 +115,6 @@ fun MainScreen(
     var sortMenuExpanded by remember { mutableStateOf(false) }
     // 睡眠定时器弹窗
     var showSleepTimer by remember { mutableStateOf(false) }
-    // 播放历史弹窗
-    var showHistory by remember { mutableStateOf(false) }
     // 关于弹窗
     var showAbout by remember { mutableStateOf(false) }
 
@@ -130,7 +128,7 @@ fun MainScreen(
     Scaffold(
         topBar = {
             // 覆盖界面（智能歌单/电台/搜索）隐藏 DDmusic 主顶栏，让覆盖界面用自己的顶栏更沉浸；
-            // 主菜单（睡眠定时/主题/关于/播放历史/排序/刷新扫描）只在曲库首页通过 ⋮ 进入
+            // 主菜单（睡眠定时/主题/关于/排序/刷新扫描）只在曲库首页通过 ⋮ 进入
             val inOverlay = showRadio || showSmartPlaylist || onlineSearchQuery != null
             if (!inOverlay) {
                 TopAppBar(
@@ -161,15 +159,6 @@ fun MainScreen(
                                 onClick = {
                                     menuExpanded = false
                                     sortMenuExpanded = true
-                                }
-                            )
-                            // 播放历史&排行
-                            DropdownMenuItem(
-                                text = { Text("播放历史与排行") },
-                                leadingIcon = { Icon(Icons.Default.History, contentDescription = null) },
-                                onClick = {
-                                    menuExpanded = false
-                                    showHistory = true
                                 }
                             )
                             // 睡眠定时器
@@ -407,14 +396,6 @@ fun MainScreen(
         SleepTimerDialog(
             viewModel = viewModel,
             onDismiss = { showSleepTimer = false }
-        )
-    }
-
-    // 播放历史弹窗
-    if (showHistory) {
-        HistorySheet(
-            viewModel = viewModel,
-            onDismiss = { showHistory = false }
         )
     }
 
@@ -1933,148 +1914,6 @@ private fun SleepTimerDialog(
         }
     )
 }
-
-/** 播放历史 + 排行弹窗 */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun HistorySheet(
-    viewModel: MusicViewModel,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 24.dp)) {
-            Text(
-                "最近播放",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-            val recent = viewModel.recentSongs
-            if (recent.isEmpty()) {
-                Text(
-                    "还没有播放记录",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                )
-            } else {
-                recent.take(20).forEachIndexed { index, song ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                viewModel.playSongs(recent, index)
-                                onDismiss()
-                            }
-                            .padding(horizontal = 20.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        SongCover(
-                            song = song,
-                            contentScale = ContentScale.Crop,
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .size(40.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                song.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                song.artist,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        // 播放次数
-                        val count = viewModel.playHistory[song.id] ?: 0
-                        Text(
-                            "$count 次",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-
-            Text(
-                "播放排行",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-            val top = viewModel.topPlayedSongs
-            if (top.isEmpty()) {
-                Text(
-                    "暂无排行数据",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                )
-            } else {
-                top.take(10).forEachIndexed { index, (song, count) ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                viewModel.playSongs(top.map { it.first }, index)
-                                onDismiss()
-                            }
-                            .padding(horizontal = 20.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "${index + 1}",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (index < 3) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.width(28.dp)
-                        )
-                        SongCover(
-                            song = song,
-                            contentScale = ContentScale.Crop,
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .size(40.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                song.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                song.artist,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Text(
-                            "$count 次",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 /** 关于弹窗（v1.0.0 正式版：完整功能说明，内容可滑动） */
 @Composable
 private fun AboutDialog(onDismiss: () -> Unit) {
@@ -2088,7 +1927,7 @@ private fun AboutDialog(onDismiss: () -> Unit) {
             ) {
                 Text("DDmusic", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "版本 1.0.1",
+                    "版本 1.0.2",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

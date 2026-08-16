@@ -1,15 +1,15 @@
-# DDmusic 音乐 App — 项目状态与开发档案（v1.0.1）
+# DDmusic 音乐 App — 项目状态与开发档案（v1.0.2）
 
 > 给新会话/新窗口的快速上手文档。完整排障史见旧工作区 `...\obsidian\agent\work buddy\2026-08-14-21-06-06\`（MEMORY.md v2-v5 + 每日日志 + 决策文档）。
 > 当日工作日志见当前工作区 `.workbuddy/memory/2026-08-16.md`。
 
 ## 一、项目总览
 
-- **应用**：DDmusic —— 本地音乐 + 在线试听/下载的安卓音乐播放器（**v1.0.1**）
+- **应用**：DDmusic —— 本地音乐 + 在线试听/下载的安卓音乐播放器（**v1.0.2**）
 - **代码**：`D:\dev\music-app`（Git 仓库，master 分支，v1.0.0 = `86d6a5b`）
 - **远程**：`https://github.com/drw1230/music-app`（Private 仓库，SSH 免密 push）
 - **包名**：`com.dengdeng.music`（minSdk 26 / targetSdk 35 / compileSdk 35，debug 签名 keystore 入仓库）
-- **版本**：versionCode 2 / versionName 1.0.1
+- **版本**：versionCode 3 / versionName 1.0.2
 - **技术栈**：Kotlin + Jetpack Compose + Media3 + DataStore + Coil + AGP 8.9.1 + Gradle 8.11.1 + JDK 21
 
 ## 二、功能清单（v1.0.0）
@@ -36,6 +36,7 @@
 | v0.9.x | ff11578 | 曲库缓存秒显 + 启动体验优化（R8/权限延后/SplashScreen API/图标品牌图） |
 | **v1.0.0** | **86d6a5b** | **正式版**：智能歌单（最常听/冷门探索）、在线收藏进喜欢、tab 专辑→最近、电台探索版 B+C+D 混合/熟悉版相似曲目（weapi simiSong）、三模块数据源随机化 + 30 天记忆过期、Fly 风格播放页、下载保存封面歌词、定时器移除、关于弹窗可滑动功能说明 |
 | **v1.0.1** | **8c87a4b** | **无音乐也能用在线功能**：无权限/空曲库显示 OnlineOnlyView（每日电台/智能歌单/在线搜索三入口），删死代码；小米11U 兼容性验证通过 |
+| **v1.0.2** | **（待提交）** | **移除曲库菜单"播放历史与排行"**（功能可由"最近"tab 替代）；APK 在桌面 DDmusic-v1.0.2.apk |
 
 ## 四、构建环境（重要！WSL2 容器构建）
 
@@ -64,7 +65,7 @@
 
 ## 七、待办 / 提醒
 
-1. **v1.0.1 已发布**：代码已 push（8c87a4b），APK 已装小米 11U（测试机）与原手机
+1. **v1.0.2 已发布**：APK 桌面 DDmusic-v1.0.2.apk；已装三星/小米/原手机
 2. GitHub token（ghp_0eC5...）曾在会话暴露 → 建议撤销重建（SSH push 不受影响）
 3. 后续可选优化：构建成功自动发 GitHub Release；音频焦点/耳机线控；桌面小组件
 4. 用户偏好记录（长期）：电台/冷门探索**每次打开要不同**（大池子+随机化+30天记忆过期已实现）；熟悉版**不要本地歌**只要相似曲目；**不做 AI 自动化真机验收**（用户自己验）
