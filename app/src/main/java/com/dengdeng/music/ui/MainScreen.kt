@@ -264,9 +264,22 @@ fun MainScreen(
                     )
                 }
             }
-            !hasPermission -> PermissionHint(Modifier.padding(padding))
+            // 无音乐权限 / 曲库为空：仍可用在线功能（每日电台/智能歌单/在线搜索）
+            !hasPermission -> OnlineOnlyView(
+                modifier = Modifier.padding(padding),
+                hasPermission = false,
+                onRadio = { showRadio = true },
+                onSmartPlaylist = { showSmartPlaylist = true },
+                onSearch = { onlineSearchQuery = "" }
+            )
             viewModel.isLoading -> LoadingView(Modifier.padding(padding))
-            viewModel.songs.isEmpty() -> EmptyView(Modifier.padding(padding))
+            viewModel.songs.isEmpty() -> OnlineOnlyView(
+                modifier = Modifier.padding(padding),
+                hasPermission = true,
+                onRadio = { showRadio = true },
+                onSmartPlaylist = { showSmartPlaylist = true },
+                onSearch = { onlineSearchQuery = "" }
+            )
             else -> {
                 // Tab 栏 + 内容
                 Column(Modifier.padding(padding)) {
@@ -1758,14 +1771,6 @@ private fun MiniPlayerBar(viewModel: MusicViewModel, onClick: () -> Unit = {}) {
     }
 }
 
-/** 权限提示 */
-@Composable
-private fun PermissionHint(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("需要音乐权限才能扫描本地歌曲", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
 /** 加载中（普通转圈，不用品牌页样式） */
 @Composable
 private fun LoadingView(modifier: Modifier = Modifier) {
@@ -1774,19 +1779,98 @@ private fun LoadingView(modifier: Modifier = Modifier) {
     }
 }
 
-/** 空列表 */
+/** 无本地音乐 / 无权限视图：提示 + 在线功能入口（电台/智能歌单/搜索，均不依赖本地曲库） */
 @Composable
-private fun EmptyView(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("还没有音乐", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
+private fun OnlineOnlyView(
+    modifier: Modifier = Modifier,
+    hasPermission: Boolean,
+    onRadio: () -> Unit,
+    onSmartPlaylist: () -> Unit,
+    onSearch: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 24.dp)
+    ) {
+        // 状态提示
+        Text(
+            if (hasPermission) "本地暂无音乐，可先使用在线功能" else "未授予音乐权限：本地歌曲不可用，在线功能不受影响",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (hasPermission) "把音乐文件放入手机后，点右上角 ⋮ → 刷新扫描即可出现曲库" else "可在系统设置中授予音乐权限，之后点右上角 ⋮ → 刷新扫描",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(20.dp))
+
+        // 三个在线功能入口卡片
+        OnlineEntryCard(
+            icon = { Icon(Icons.Default.Radio, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = "每日电台",
+            subtitle = "探索版（榜单+随机歌单）+ 熟悉版（相似曲目）",
+            onClick = onRadio
+        )
+        Spacer(Modifier.height(12.dp))
+        OnlineEntryCard(
+            icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = "智能歌单",
+            subtitle = "最常听（本地+在线统计）· 冷门探索（平台冷门新歌）",
+            onClick = onSmartPlaylist
+        )
+        Spacer(Modifier.height(12.dp))
+        OnlineEntryCard(
+            icon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = "在线搜索",
+            subtitle = "网易云 / QQ / 酷狗 3 源聚合，试听 / 下载",
+            onClick = onSearch
+        )
+    }
+}
+
+/** 在线功能入口卡片（圆角 + 图标 + 标题 + 说明 + 右箭头） */
+@Composable
+private fun OnlineEntryCard(
+    icon: @Composable () -> Unit,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f))
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) { icon() }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(2.dp))
             Text(
-                "把音乐文件放到手机里，点右上角刷新",
+                subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
     }
 }
 
@@ -2004,7 +2088,7 @@ private fun AboutDialog(onDismiss: () -> Unit) {
             ) {
                 Text("DDmusic", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "版本 1.0.0（正式版）",
+                    "版本 1.0.1",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
