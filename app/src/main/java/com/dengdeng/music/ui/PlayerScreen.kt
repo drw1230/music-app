@@ -267,16 +267,22 @@ fun PlayerScreen(
                     .fillMaxWidth()
             ) {
                 Column(Modifier.fillMaxSize()) {
-                    // 封面区（占剩余空间；封面下移约 1/3 直径填充中间空白；点击进大歌词页）
-                    Box(
+                    // 封面区（占剩余空间；顶部留白实现"封面下移"，不用 offset——offset 不占布局
+                    // 空间会把封面底压到小歌词上造成重叠；点击进大歌词页）
+                    Column(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .offset(y = 96.dp)
                             .clickable { showFullLyrics = true }
-                            .padding(top = 8.dp, bottom = 8.dp),
-                        contentAlignment = Alignment.Center
                     ) {
+                        // 封面下移空间（真实占位，封面与小歌词之间自然留出间距不重叠）
+                        Spacer(Modifier.height(72.dp))
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
                         Crossfade(
                     targetState = showLyrics,
                     animationSpec = tween(durationMillis = 300),
@@ -310,8 +316,9 @@ fun PlayerScreen(
                         }
                     }
                 }
+                        }
                     }
-                    // 小歌词（封面下方三行：上一句/当前句/下一句；点击进大歌词页）
+                    // 小歌词（封面正下方，间距由封面区剩余空间撑开；点击进大歌词页）
                     MiniLyricsView(
                         song = song,
                         viewModel = viewModel,
