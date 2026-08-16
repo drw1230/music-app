@@ -86,9 +86,13 @@ fun GestureSeekBar(
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id }
-                        if (change == null || change.changedToUp()) {
+                        if (change == null) {
+                            // 指针事件短暂缺失（事件合并/瞬时抖动）：继续等待，避免手势中断导致拇指闪回原位置
+                            continue
+                        }
+                        if (change.changedToUp()) {
                             if (isDrag) {
-                                // 滑动松手：相对 seek（基准 + 位移比例 * 时长）
+                                // 滑动松手：兜底 seek 到最终位置（拖动中已实时 seek，此处幂等）
                                 val target = dragStartMs + (accumulated / barWidthPx * currentDur).toLong()
                                 onSeek(target.coerceIn(0L, currentDur.coerceAtLeast(0L)))
                             } else {
@@ -112,9 +116,13 @@ fun GestureSeekBar(
                             if (isDrag) {
                                 dragDeltaPx = accumulated
                                 isDragging = true
+                                val target = dragStartMs + (accumulated / barWidthPx * currentDur).toLong()
+                                val clamped = target.coerceIn(0L, currentDur.coerceAtLeast(0L))
+                                // 实时 seek：拖到哪儿就在哪儿播放（主流播放器体验）
+                                onSeek(clamped)
                                 // 实时回调当前显示进度（供时间文字跟随）
                                 val dp = if (currentDur > 0) {
-                                    ((dragStartMs + (accumulated / barWidthPx * currentDur).toLong()).toFloat() / currentDur).coerceIn(0f, 1f)
+                                    (clamped.toFloat() / currentDur).coerceIn(0f, 1f)
                                 } else 0f
                                 onDragState(true, dp)
                                 change.consume()
