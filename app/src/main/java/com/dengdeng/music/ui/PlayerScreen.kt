@@ -1,5 +1,6 @@
 package com.dengdeng.music.ui
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
@@ -28,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Share
@@ -99,6 +101,8 @@ fun PlayerScreen(
     var showFullLyrics by remember { mutableStateOf(false) }
 
     var showQueue by remember { mutableStateOf(false) }
+    // 添加到歌单弹窗
+    var showAddToPlaylist by remember { mutableStateOf(false) }
     val playerContext = LocalContext.current
     // 歌曲菜单 + 封面选择
     var showSongMenu by remember { mutableStateOf(false) }
@@ -383,6 +387,16 @@ fun PlayerScreen(
                 IconButton(onClick = { viewModel.cycleRepeatMode() }) {
                     Icon(cycleIcon, contentDescription = "播放模式", tint = cycleTint)
                 }
+                // 添加到歌单（本地歌：选择已有歌单 / 新建；在线歌暂不支持）
+                IconButton(onClick = {
+                    if (viewModel.isOnlinePlaying) {
+                        Toast.makeText(playerContext, "在线歌曲暂不支持加入歌单", Toast.LENGTH_SHORT).show()
+                    } else {
+                        showAddToPlaylist = true
+                    }
+                }) {
+                    Icon(Icons.Default.Add, contentDescription = "添加到歌单", tint = Color.White.copy(alpha = 0.8f))
+                }
                 IconButton(onClick = {
                     downloadSong = OnlineMetadataFetcher.OnlineSong(
                         platform = if (viewModel.isOnlinePlaying) "在线播放" else "",
@@ -517,6 +531,15 @@ fun PlayerScreen(
             QueueSheet(
                 viewModel = viewModel,
                 onDismiss = { showQueue = false }
+            )
+        }
+
+        // 添加到歌单弹窗
+        if (showAddToPlaylist) {
+            AddToPlaylistSheet(
+                viewModel = viewModel,
+                songId = song.id,
+                onDismiss = { showAddToPlaylist = false }
             )
         }
 
@@ -985,14 +1008,7 @@ private fun MiniLyricsView(
         }
     }
 
-    // 深色半透明底板：白色歌词在任意主题背景上都清晰（播放页整体背景不变）
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.Black.copy(alpha = 0.35f))
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         when {
             !loaded -> Text(
                 "歌词加载中…",

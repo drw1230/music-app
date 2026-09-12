@@ -29,6 +29,7 @@ import com.dengdeng.music.data.OnlineDownloader
 import com.dengdeng.music.data.OnlineMetadataFetcher
 import com.dengdeng.music.data.OnlineMetadataFetcher.AudioSource
 import com.dengdeng.music.data.OnlineMetadataFetcher.OnlineSong
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 联网搜索结果界面：多源搜索歌曲 → 点击进入音源选择 */
@@ -37,20 +38,32 @@ fun OnlineSearchScreen(
     query: String,
     onBack: () -> Unit,
     onDownloaded: () -> Unit = {},
-    onPlay: (OnlineSong, AudioSource) -> Unit = { _, _ -> }
+    onPlay: (OnlineSong, AudioSource) -> Unit = { _, _ -> },
+    onRepairSources: () -> Unit = {}   // "修复音源"：清空音源缓存（由调用方注入）
 ) {
     var loading by remember(query) { mutableStateOf(true) }
     var results by remember(query) { mutableStateOf<List<OnlineSong>>(emptyList()) }
     var error by remember(query) { mutableStateOf(false) }
     // 正在查看音源的歌曲（非 null 时显示音源弹窗）
     var selectedSong by remember { mutableStateOf<OnlineSong?>(null) }
+    // "修复音源"：tick 变化 → 重新搜索
+    var repairTick by remember(query) { mutableIntStateOf(0) }
+    var repairedTip by remember { mutableStateOf(false) }
 
-    LaunchedEffect(query) {
+    LaunchedEffect(query, repairTick) {
         loading = true
         error = false
         results = OnlineMetadataFetcher.searchSongsOnline(query)
         loading = false
         if (results.isEmpty()) error = true
+    }
+
+    // "已修复"提示 1.6 秒后复原
+    LaunchedEffect(repairedTip) {
+        if (repairedTip) {
+            delay(1600)
+            repairedTip = false
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -76,14 +89,33 @@ fun OnlineSearchScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            if (!loading && results.isNotEmpty()) {
-                // 来源统计
-                val platforms = results.map { it.platform }.distinct()
+            // 右侧：平台来源统计 + 修复音源小按钮
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.padding(end = 16.dp)
+            ) {
+                if (!loading && results.isNotEmpty()) {
+                    val platforms = results.map { it.platform }.distinct()
+                    Text(
+                        platforms.joinToString(" + "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
                 Text(
-                    platforms.joinToString(" + "),
+                    if (repairedTip) "已修复 ✓" else "修复音源",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(end = 16.dp)
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .clickable {
+                            onRepairSources()   // 清空音源缓存
+                            repairedTip = true
+                            repairTick++        // 触发重新搜索
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                 )
             }
         }

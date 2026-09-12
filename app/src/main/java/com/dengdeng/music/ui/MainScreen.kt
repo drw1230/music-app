@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -126,6 +128,14 @@ fun MainScreen(
     var showSleepTimer by remember { mutableStateOf(false) }
     // 关于弹窗
     var showAbout by remember { mutableStateOf(false) }
+    // 软件升级①：蓝奏云网盘下载页（App 内 WebView）
+    var showUpgrade by remember { mutableStateOf(false) }
+    // 软件升级②：GitHub 最新版本（api.github.com 直连查版本 + 下载，不打开网页）
+    var showGitHubUpdate by remember { mutableStateOf(false) }
+    // 软件升级下载源选择菜单
+    var upgradeMenuExpanded by remember { mutableStateOf(false) }
+    // 听歌识曲界面
+    var showRecognize by remember { mutableStateOf(false) }
 
     if (showPlayer) {
         // 播放页打开时，安卓返回键先关闭播放页回到曲库（再按返回键才退出 App）
@@ -138,7 +148,8 @@ fun MainScreen(
         topBar = {
             // 覆盖界面（智能歌单/电台/搜索）隐藏 DDmusic 主顶栏，让覆盖界面用自己的顶栏更沉浸；
             // 主菜单（睡眠定时/主题/关于/排序/刷新扫描）只在曲库首页通过 ⋮ 进入
-            val inOverlay = showRadio || showSmartPlaylist || onlineSearchQuery != null
+            val inOverlay = showRadio || showSmartPlaylist || onlineSearchQuery != null ||
+                    showUpgrade || showRecognize
             if (!inOverlay) {
                 TopAppBar(
                     title = { Text("DDmusic") },
@@ -193,6 +204,24 @@ fun MainScreen(
                                     onThemeModeChange(if (themeMode == 0) 2 else 0)
                                 }
                             )
+                            // 听歌识曲（原生录音 → AHA/ACRCloud 识别 → 自动带词进搜索）
+                            DropdownMenuItem(
+                                text = { Text("听歌识曲") },
+                                leadingIcon = { Icon(Icons.Default.Mic, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    showRecognize = true
+                                }
+                            )
+                            // 软件升级（先弹二级菜单选下载源：蓝奏云网盘 / GitHub Releases）
+                            DropdownMenuItem(
+                                text = { Text("软件升级") },
+                                leadingIcon = { Icon(Icons.Default.SystemUpdate, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    upgradeMenuExpanded = true
+                                }
+                            )
                             // 关于
                             DropdownMenuItem(
                                 text = { Text("关于 DDmusic") },
@@ -232,6 +261,26 @@ fun MainScreen(
                     )
                 }
             }
+            // 软件升级界面（蓝奏云网页，覆盖整个曲库区；返回键由界面内处理，支持回网页上一页）
+            showUpgrade -> {
+                Box(Modifier.padding(padding)) {
+                    UpgradeScreen(url = UPGRADE_URL_LANZOU, onBack = { showUpgrade = false })
+                }
+            }
+            // 听歌识曲界面（覆盖整个曲库区；识别成功 → 自动带搜索词进入联网搜索）
+            showRecognize -> {
+                BackHandler { showRecognize = false }
+                Box(Modifier.padding(padding)) {
+                    RecognizeScreen(
+                        onBack = { showRecognize = false },
+                        onPickQuery = { q ->
+                            showRecognize = false
+                            viewModel.addSearchHistory(q)
+                            onlineSearchQuery = q
+                        }
+                    )
+                }
+            }
             // 每日电台界面（覆盖整个曲库区）
             showRadio -> {
                 BackHandler { showRadio = false }
@@ -251,6 +300,7 @@ fun MainScreen(
                         query = q,
                         onBack = { onlineSearchQuery = null },
                         onDownloaded = { viewModel.scanMusic() },
+                        onRepairSources = { viewModel.clearSourceCaches() },
                         onPlay = { song, source ->
                             source.url?.let { url ->
                                 // 在线试听：走迷你条播放（不进入全屏播放界面）
@@ -353,6 +403,42 @@ fun MainScreen(
     }
 
     // ===== 右上角菜单触发的弹窗 =====
+
+    // 软件升级：下载源选择（二级菜单）
+    if (upgradeMenuExpanded) {
+        AlertDialog(
+            onDismissRequest = { upgradeMenuExpanded = false },
+            title = { Text("软件升级") },
+            text = {
+                Column {
+                    UpgradeSourceRow(
+                        name = "蓝奏云网盘",
+                        desc = "网盘分享页，访问密码 1234",
+                        onClick = {
+                            upgradeMenuExpanded = false
+                            showUpgrade = true
+                        }
+                    )
+                    UpgradeSourceRow(
+                        name = "GitHub Releases",
+                        desc = "官方仓库最新版本（直连下载）",
+                        onClick = {
+                            upgradeMenuExpanded = false
+                            showGitHubUpdate = true
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { upgradeMenuExpanded = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 软件升级：GitHub 最新版本（进来自动查 api.github.com，不走网页）
+    if (showGitHubUpdate) {
+        GitHubUpdateDialog(onDismiss = { showGitHubUpdate = false })
+    }
 
     // 排序菜单（AlertDialog 形式）
     if (sortMenuExpanded) {
@@ -1209,25 +1295,33 @@ private fun CreatePlaylistDialog(
     )
 }
 
-/** 添加到歌单的底部弹窗（由 MainScreen 的状态控制显示） */
+/** 添加到歌单的底部弹窗（曲库列表 / 播放页共用）：选已有歌单直接添加，或新建歌单并顺手加入 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddToPlaylistSheet(
+internal fun AddToPlaylistSheet(
     viewModel: MusicViewModel,
     songId: Long,
     onDismiss: () -> Unit
 ) {
+    // 新建歌单：输入模式 + 名称
+    var creating by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 24.dp)) {
+        Column(
+            Modifier
+                .padding(bottom = 24.dp)
+                .imePadding()
+        ) {
             Text(
                 "添加到歌单",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
             )
-            if (viewModel.playlists.isEmpty()) {
+            if (viewModel.playlists.isEmpty() && !creating) {
                 Text(
-                    "还没有歌单，去歌单 Tab 新建一个吧",
+                    "还没有歌单，点下面「新建歌单」创建一个",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
@@ -1255,6 +1349,55 @@ private fun AddToPlaylistSheet(
                             style = MaterialTheme.typography.bodyLarge
                         )
                     }
+                }
+            }
+
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+
+            if (creating) {
+                // 输入歌单名 → 创建并直接把这首歌加进去
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        placeholder = { Text("歌单名称") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = {
+                        viewModel.createPlaylistWithSong(newName.trim().ifBlank { "我的歌单" }, songId)
+                        onDismiss()
+                    }) {
+                        Text("创建并添加")
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { creating = true }
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "新建歌单",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
             }
         }
@@ -1614,6 +1757,32 @@ private fun SongRow(
                 )
             }
         }
+    }
+}
+
+/** 软件升级二级菜单里的下载源选项行（名称 + 说明 + 右箭头，整行可点） */
+@Composable
+private fun UpgradeSourceRow(name: String, desc: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(text = name, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

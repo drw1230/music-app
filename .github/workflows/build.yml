@@ -6,6 +6,10 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
+# 自动发 Release 需要写权限（默认 token 权限收紧时会失败）
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -47,3 +51,29 @@ jobs:
         with:
           name: music-app-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      # ===== 自动发 Release（App 内「软件升级 → GitHub Releases」就是读这里）=====
+      # 标签取 build.gradle.kts 的 versionName（如 v1.0.5）；同一版本重复构建 = 覆盖同一 Release
+      - name: Read versionName
+        id: ver
+        run: |
+          V=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          if [ -z "$V" ]; then echo "!! 未能从 app/build.gradle.kts 读到 versionName"; exit 1; fi
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+          echo "读到版本: v$V"
+
+      - name: Prepare release APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk "DDmusic-${{ steps.ver.outputs.tag }}.apk"
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: DDmusic ${{ steps.ver.outputs.tag }}
+          body: |
+            自动构建产物（debug 签名，可直接覆盖安装，不丢数据）
+
+            - commit: ${{ github.sha }}
+            - 下载下方 `DDmusic-${{ steps.ver.outputs.tag }}.apk` 后直接安装
+          files: DDmusic-${{ steps.ver.outputs.tag }}.apk
+          make_latest: true

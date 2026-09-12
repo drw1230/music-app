@@ -631,6 +631,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         urlCache["${song.title}|${song.artist}".lowercase()] = url
     }
 
+    /** 清空音源相关缓存（搜索页"修复音源"用）：URL 缓存 + 在线搜索/音源聚合缓存 */
+    fun clearSourceCaches() {
+        urlCache.clear()
+        OnlineMetadataFetcher.clearOnlineCaches()
+    }
+
     /** 记录上一次切走的歌（用于判断 10 秒内切歌） */
     private var lastSongKey: String? = null
 
@@ -1025,6 +1031,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         viewModelScope.launch {
             UserLibraryStore.createPlaylist(context, name)
+        }
+    }
+
+    /** 新建歌单并把指定歌曲直接加进去（"新建歌单"顺手把当前歌收进来） */
+    fun createPlaylistWithSong(name: String, songId: Long) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val id = UserLibraryStore.createPlaylist(context, name)
+            UserLibraryStore.addSongToPlaylist(context, id, songId)
         }
     }
 

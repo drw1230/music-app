@@ -74,8 +74,33 @@ object OnlineMetadataFetcher {
     private val onlineSearchCache = mutableMapOf<String, List<OnlineSong>>()
     // 音源聚合结果缓存：key=平台|id → (时间戳, 音源列表)，5 分钟内不重复查询
     private val sourceCache = mutableMapOf<String, Pair<Long, List<AudioSource>>>()
+    // 酷狗兜底搜索缓存：key（title|artist）→ 酷狗 hash 信息（含 null 结果，避免反复搜索）
+    private val kugouFallbackCache = mutableMapOf<String, KugouInfo?>()
+
+    /**
+     * 网易云匿名 cookie：模拟官方 PC 客户端（os=pc + appver）
+     * 实测（2026-09-12）：不带 cookie 时 VIP/付费歌曲（fee=1）返回 code=-110、url=null；
+     * 带上后 VIP 歌 6/6 全部解析成功且音频流可达。无需真实账号登录。
+     */
+    private val neteaseAnonCookie: String by lazy {
+        val rnd = SecureRandom()
+        val token = (1..32).joinToString("") { "0123456789abcdef"[rnd.nextInt(16)].toString() }
+        "os=pc; appver=2.10.6; MUSIC_A=$token"
+    }
 
     private fun cacheKey(title: String, artist: String) = "$title|$artist".trim().lowercase()
+
+    /**
+     * 清空在线搜索/音源相关缓存（"修复音源"用）
+     * 场景：某首歌曾解析失败（VIP 受限/平台挂掉）被写进缓存 → 之后一直"播不了"；
+     * 清空后下次解析重新走网络，配合 cookie / 跨平台兜底即可恢复。
+     * 注意：不清 matchCache（歌曲匹配缓存），避免影响本地歌曲封面/歌词的匹配速度。
+     */
+    fun clearOnlineCaches() {
+        onlineSearchCache.clear()
+        sourceCache.clear()
+        kugouFallbackCache.clear()
+    }
 
     /**
      * 爬取多个候选封面 URL（多源汇总，供用户手动选择）：
@@ -373,6 +398,11 @@ object OnlineMetadataFetcher {
                 readTimeout = 6000
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 setRequestProperty("Accept", "application/json")
+                // 网易云接口：带 Referer + 匿名 cookie，否则 VIP/付费歌曲解析不出播放地址（code=-110）
+                if (url.host.contains("163.com")) {
+                    setRequestProperty("Referer", "https://music.163.com")
+                    setRequestProperty("Cookie", neteaseAnonCookie)
+                }
             }
             readJson(conn)
         } catch (e: Exception) {
@@ -584,36 +614,14 @@ object OnlineMetadataFetcher {
                     .awaitAll().filterNotNull()
             }
 
-            // ===== 3. 酷狗 =====
+            // ===== 3. 酷狗（本平台 extra 优先；其它平台的歌 → 按歌名+歌手搜索兜底）=====
             val kugou = async {
-                val kg = parseKugouExtra(song)
+                val kg = parseKugouExtra(song) ?: searchKugouByTitle(title, artist)
                 if (kg != null) {
                     val out = mutableListOf<AudioSource>()
                     kugouAudioSources(kg.hash, kg.hqHash, kg.sqHash, kg.size, kg.hqSize, kg.sqSize, kg.hqBit, kg.sqBit, durSec, out)
                     out.toList()
-                } else {
-                    try {
-                        val kUrl = URL("https://songsearch.kugou.com/song_search_v2?keyword=" + URLEncoder.encode("$title $artist".trim(), "UTF-8") + "&page=1&pagesize=1")
-                        val kJson = httpGet(kUrl)
-                        val s = kJson?.optJSONObject("data")?.optJSONArray("lists")?.optJSONObject(0)
-                        if (s != null) {
-                            val out = mutableListOf<AudioSource>()
-                            kugouAudioSources(
-                                hash = s.optString("FileHash", ""),
-                                hqHash = s.optString("HQFileHash", ""),
-                                sqHash = s.optString("SQFileHash", ""),
-                                size = s.optLong("FileSize", 0L),
-                                hqSize = s.optLong("HQFileSize", 0L),
-                                sqSize = s.optLong("SQFileSize", 0L),
-                                hqBit = s.optInt("HQBitrate", 0),
-                                sqBit = s.optInt("SQBitrate", 0),
-                                durSec = durSec,
-                                sources = out
-                            )
-                            out.toList()
-                        } else emptyList()
-                    } catch (e: Exception) { emptyList() }
-                }
+                } else emptyList()
             }
 
             listOf(netease, qq, kugou).awaitAll().flatten()
@@ -647,6 +655,53 @@ object OnlineMetadataFetcher {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * 按「歌名 + 歌手」在酷狗搜索（跨平台兜底用）
+     * 结果缓存（含 null），避免同一首歌反复搜索
+     */
+    private suspend fun searchKugouByTitle(title: String, artist: String): KugouInfo? {
+        if (title.isBlank()) return null
+        val key = cacheKey(title, artist)
+        if (kugouFallbackCache.containsKey(key)) return kugouFallbackCache[key]
+        val info = try {
+            val kw = URLEncoder.encode("$title $artist".trim(), "UTF-8")
+            val url = URL("https://songsearch.kugou.com/song_search_v2?keyword=$kw&page=1&pagesize=1")
+            val s = httpGet(url)?.optJSONObject("data")?.optJSONArray("lists")?.optJSONObject(0)
+            s?.let {
+                KugouInfo(
+                    hash = it.optString("FileHash", ""),
+                    hqHash = it.optString("HQFileHash", ""),
+                    sqHash = it.optString("SQFileHash", ""),
+                    size = it.optLong("FileSize", 0L),
+                    hqSize = it.optLong("HQFileSize", 0L),
+                    sqSize = it.optLong("SQFileSize", 0L),
+                    hqBit = it.optInt("HQBitrate", 0),
+                    sqBit = it.optInt("SQBitrate", 0)
+                )
+            }?.takeIf { it.hash.isNotBlank() }
+        } catch (e: Exception) {
+            null
+        }
+        kugouFallbackCache[key] = info
+        return info
+    }
+
+    /**
+     * 跨平台兜底取流：本平台音源解析失败（VIP 限制 / 未登录 / 版权）时，
+     * 按「歌名 + 歌手」去酷狗搜索取流（酷狗免费源多、无需登录，实测 8/8 稳定）
+     */
+    private suspend fun kugouFallbackUrl(title: String, artist: String): String? {
+        val info = searchKugouByTitle(title, artist) ?: return null
+        if (info.hqHash.isNotBlank()) {
+            kugouAudioSource(info.hqHash, "高品", "MP3", if (info.hqBit > 0) info.hqBit else 320000, info.hqSize, 1L)
+                ?.url?.let { return it }
+        }
+        if (info.hash.isNotBlank()) {
+            kugouAudioSource(info.hash, "标准", "MP3", 128000, info.size, 1L)?.url?.let { return it }
+        }
+        return null
     }
 
     /** 酷狗多档音源（普通 / 高品 / 无损，各调一次 getSongInfo 拿播放地址，并行请求） */
@@ -1147,13 +1202,14 @@ object OnlineMetadataFetcher {
     /**
      * 解析单曲的可用播放 URL（按平台单请求，供电台/试听快速取流）
      * 优先 高品（网易云 320k / QQ M800 / 酷狗 320k），失败降级标准
+     * 本平台解析失败时跨平台兜底：按「歌名 + 歌手」去酷狗搜索取流
      */
     suspend fun resolveOnlineUrl(song: OnlineSong): String? = withContext(Dispatchers.IO) {
-        when (song.platform) {
+        val direct = when (song.platform) {
             "网易云" -> {
                 val id = song.id.toLongOrNull() ?: 0L
-                if (id <= 0L) return@withContext null
-                neteaseAudioSource(id, 320000, "高品", "MP3", 1L)?.url
+                if (id <= 0L) null
+                else neteaseAudioSource(id, 320000, "高品", "MP3", 1L)?.url
                     ?: neteaseAudioSource(id, 128000, "标准", "MP3", 1L)?.url
             }
             "QQ音乐" -> {
@@ -1170,5 +1226,7 @@ object OnlineMetadataFetcher {
             }
             else -> null
         }
+        // 本平台解析失败（VIP 限制 / 未登录 / 版权下架）→ 酷狗兜底
+        direct ?: kugouFallbackUrl(song.title, song.artist)
     }
 }
