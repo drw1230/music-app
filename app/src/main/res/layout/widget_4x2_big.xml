@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DDmusic 4x2 桌面小组件（RemoteViews：仅 LinearLayout/FrameLayout/TextView/ImageView/ProgressBar/ViewFlipper） -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="@drawable/widget_bg"
+    android:padding="10dp">
+
+    <!-- 封面（点击进播放页） -->
+    <FrameLayout
+        android:id="@+id/cover_frame"
+        android:layout_width="160dp"
+        android:layout_height="match_parent">
+        <ImageView
+            android:id="@+id/cover"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:src="@drawable/w_mode_seq"
+            android:contentDescription="封面"/>
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginStart="10dp">
+
+        <!-- 行1：歌名/艺术家 + 小音浪 + 喜欢 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1.15"
+                android:orientation="vertical">
+                <TextView
+                    android:id="@+id/title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="18sp"
+                    android:textColor="#E6E1E5"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:text="DDmusic"/>
+                <TextView
+                    android:id="@+id/artist"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="13sp"
+                    android:textColor="#938F99"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:text="点 ▶ 立刻开播"/>
+            </LinearLayout>
+
+            <!-- 小音浪：帧动画，点击切换动画方案 -->
+            <ViewFlipper
+                android:id="@+id/wave_flipper"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:flipInterval="380"
+                android:autoStart="true"/>
+
+            <!-- 喜欢 -->
+            <ImageView
+                android:id="@+id/btn_like"
+                android:layout_width="30dp"
+                android:layout_height="40dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/w_heart_off"
+                android:contentDescription="喜欢"/>
+        </LinearLayout>
+
+        <!-- 行2：进度条（10 段点击跳转） + 时间 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <TextView
+                android:id="@+id/t_cur"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="10sp"
+                android:textColor="#938F99"
+                android:text="0:00"/>
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp">
+                <ProgressBar
+                    android:id="@+id/progress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="8dp"
+                    android:layout_gravity="center_vertical"
+                    android:max="1000"
+                    android:progress="0"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="horizontal">
+                    <View android:id="@+id/seek0" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek3" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek4" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek5" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek6" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek7" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek8" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                    <View android:id="@+id/seek9" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+                </LinearLayout>
+            </FrameLayout>
+            <TextView
+                android:id="@+id/t_max"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="10sp"
+                android:textColor="#938F99"
+                android:text="0:00"/>
+        </LinearLayout>
+
+        <!-- 行3：控制键 上一首/播放/下一首/模式/电台 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1.1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <ImageView android:id="@+id/btn_prev" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:scaleType="centerInside" android:src="@drawable/w_prev" android:contentDescription="上一首"/>
+            <ImageView android:id="@+id/btn_play" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1.15" android:scaleType="centerInside" android:src="@drawable/w_play" android:contentDescription="播放/暂停"/>
+            <ImageView android:id="@+id/btn_next" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:scaleType="centerInside" android:src="@drawable/w_next" android:contentDescription="下一首"/>
+            <ImageView android:id="@+id/btn_mode" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:scaleType="centerInside" android:src="@drawable/w_mode_seq" android:contentDescription="播放模式"/>
+            <ImageView android:id="@+id/btn_radio" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:scaleType="centerInside" android:src="@drawable/w_radio" android:contentDescription="随机电台"/>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

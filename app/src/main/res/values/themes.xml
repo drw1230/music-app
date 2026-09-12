@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose 主题完全由代码控制深浅色，这里用系统默认基础主题避免启动白屏闪烁 -->
+    <style name="Theme.MusicApp" parent="android:Theme.Material.NoActionBar" />
+
+    <!--
+        系统启动屏主题（Android 12+ SplashScreen API）：
+        背景色与 App 内品牌页一致（深黑），动画图标用 ic_launcher_foreground；
+        通过 installSplashScreen().setKeepOnScreenCondition { false } 让系统启动屏在首帧渲染后立即消失，
+        用户几乎看不到这个系统启动屏（圆角图标），直接进入 App 内的品牌 Splash。
+    -->
+    <style name="Theme.MusicApp.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_brand</item>
+        <item name="postSplashScreenTheme">@style/Theme.MusicApp</item>
+    </style>
+</resources>
