@@ -14,11 +14,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -50,6 +53,7 @@ private const val MOBILE_CHROME_UA =
 @Composable
 fun UpgradeScreen(url: String, onBack: () -> Unit) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
     BackHandler {
@@ -63,6 +67,15 @@ fun UpgradeScreen(url: String, onBack: () -> Unit) {
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                }
+            },
+            actions = {
+                // 复制当前下载页地址，方便转发给朋友（蓝奏云分享链接可直接在国内打开）
+                IconButton(onClick = {
+                    clipboard.setText(AnnotatedString(url))
+                    Toast.makeText(context, "链接已复制，可发给朋友", Toast.LENGTH_SHORT).show()
+                }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "复制链接")
                 }
             }
         )
@@ -92,7 +105,12 @@ fun UpgradeScreen(url: String, onBack: () -> Unit) {
                         // 通过 JS 挑战 / 密码验证都靠 cookie，必须放开
                         android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                         android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        webViewClient = WebViewClient()
+                        // 页面加载完注入样式：蓝奏云的密码输入框是白底无边框，在白色页面里完全隐形
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView, url: String) {
+                                view.evaluateJavascript(VISIBLE_INPUT_JS, null)
+                            }
+                        }
                         webChromeClient = WebChromeClient()
                         // 页面里的下载（APK / 压缩包）交给系统下载器
                         // 网盘直链的文件名是 32 位 hash + .bin（CDN 命名），先问页面 DOM 要真实文件名
@@ -112,6 +130,41 @@ fun UpgradeScreen(url: String, onBack: () -> Unit) {
         }
     }
 }
+
+/**
+ * 给页面里的密码/文本输入框强制加可见样式（2026-09-12 真机截图定位）：
+ * 蓝奏云密码页的输入框白底、无边框，在白色页面里完全隐形 —— 用户只能看到
+ * "文件受密码保护"的提示和"确认"按钮，看不到在哪里输密码。
+ * 处理：白底黑字 + 蓝色边框 + 居中 + 加大高度（44px+，好点好输）。
+ * 只处理可见的输入框和密码框（跳过 hidden/submit/button，避免误伤页面布局）。
+ */
+private const val VISIBLE_INPUT_JS = """
+(function(){
+  var list=document.querySelectorAll('input,textarea');
+  for(var i=0;i<list.length;i++){
+    var el=list[i];
+    var t=(el.getAttribute('type')||'').toLowerCase();
+    if(t==='hidden'||t==='submit'||t==='button'||t==='image'||t==='checkbox'||t==='radio')continue;
+    if(el.offsetParent===null&&t!=='password')continue;
+    el.style.display='block';
+    el.style.width='72%';
+    el.style.margin='14px auto';
+    el.style.height='46px';
+    el.style.padding='0 14px';
+    el.style.boxSizing='border-box';
+    el.style.fontSize='18px';
+    el.style.textAlign='center';
+    el.style.border='2px solid #2b7de9';
+    el.style.borderRadius='10px';
+    el.style.background='#ffffff';
+    el.style.color='#111111';
+    el.style.outline='none';
+    if(!el.getAttribute('placeholder')){
+      el.setAttribute('placeholder', t==='password'?'password':'');
+    }
+  }
+})()
+"""
 
 /**
  * 从当前页面 DOM 里提取真实文件名（.apk）

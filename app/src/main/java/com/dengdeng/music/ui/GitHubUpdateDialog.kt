@@ -1,5 +1,8 @@
 package com.dengdeng.music.ui
 
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -108,13 +111,20 @@ fun GitHubUpdateDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            when {
-                r is GitHubUpdater.CheckResult.Failed -> TextButton(onClick = { retryKey++ }) { Text("重试") }
-                r is GitHubUpdater.CheckResult.Found && r.release.apk != null -> TextButton(
-                    onClick = {
-                        if (GitHubUpdater.download(context, r.release)) onDismiss()
-                    }
-                ) { Text("下载") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 分享下载链接给朋友（网页直链；App 内自己下载走 API 端点，不经过这条链接）
+                if (r is GitHubUpdater.CheckResult.Found && r.release.apk != null) {
+                    TextButton(onClick = { shareDownloadLink(context, r.release) }) { Text("分享") }
+                }
+                when {
+                    r is GitHubUpdater.CheckResult.Failed ->
+                        TextButton(onClick = { retryKey++ }) { Text("重试") }
+
+                    r is GitHubUpdater.CheckResult.Found && r.release.apk != null ->
+                        TextButton(onClick = {
+                            if (GitHubUpdater.download(context, r.release)) onDismiss()
+                        }) { Text("下载") }
+                }
             }
         },
         dismissButton = {
@@ -130,4 +140,24 @@ private fun formatApkSize(bytes: Long): String = when {
     bytes <= 0L -> "未知"
     bytes >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
     else -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+}
+
+/**
+ * 用系统分享面板把 GitHub 下载直链发给朋友
+ * 注意：直链走 github.com 中转，国内未科学上网的接收方可能打不开
+ * （这是用户要的"分享下载链接"行为；国内推广更适合分享蓝奏云地址）
+ */
+private fun shareDownloadLink(context: Context, release: GitHubUpdater.ReleaseInfo) {
+    val apk = release.apk ?: return
+    try {
+        val text = "DDmusic ${release.tag} 安卓版下载：${apk.browserUrl}"
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "DDmusic 下载链接")
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        context.startActivity(Intent.createChooser(intent, "分享 DDmusic 下载链接"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "分享失败：${e.message}", Toast.LENGTH_SHORT).show()
+    }
 }

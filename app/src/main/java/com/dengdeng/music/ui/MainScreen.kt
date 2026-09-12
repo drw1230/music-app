@@ -1,5 +1,6 @@
 package com.dengdeng.music.ui
 
+import android.widget.Toast
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -78,6 +79,7 @@ import androidx.compose.ui.unit.sp
 import androidx.activity.compose.BackHandler
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import com.dengdeng.music.data.AlbumGroup
 import com.dengdeng.music.data.Playlist
@@ -2092,9 +2094,17 @@ private fun SleepTimerDialog(
         }
     )
 }
-/** 关于弹窗（v1.0.0 正式版：完整功能说明，内容可滑动） */
+/** 关于弹窗（⚠️ 功能清单要随版本更新维护；版本号动态读取，不用改这里） */
 @Composable
 private fun AboutDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    // 版本号动态读取（跟 build.gradle.kts 的 versionName 走）
+    val versionName = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrDefault("?")
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("关于 DDmusic") },
@@ -2105,9 +2115,19 @@ private fun AboutDialog(onDismiss: () -> Unit) {
             ) {
                 Text("DDmusic", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "版本 1.0.4",
+                    "版本 $versionName",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                // 联系作者：点击复制邮箱
+                Text(
+                    "联系作者： 244029088@qq.com（点击复制）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable {
+                        clipboard.setText(AnnotatedString("244029088@qq.com"))
+                        Toast.makeText(context, "邮箱已复制", Toast.LENGTH_SHORT).show()
+                    }
                 )
                 Spacer(Modifier.height(4.dp))
                 FeatureSection("🎵 本地音乐") {
@@ -2117,7 +2137,10 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                     "Fly 风格播放页：大封面、歌词页（拖动控制进度）、均衡器、播放模式切换（顺序 / 循环 / 乱序）、迷你播放条集成循环按钮"
                 }
                 FeatureSection("🌐 在线音乐") {
-                    "网易云 / QQ / 酷狗 3 源搜索试听；多音质下载（标准 / 高品 / 无损）；下载自动保存封面与歌词"
+                    "网易云 / QQ / 酷狗 3 源搜索试听；多音质下载（标准 / 高品 / 无损）；下载自动保存封面与歌词；音源多平台兜底（主源失败自动换源修复）"
+                }
+                FeatureSection("🎤 听歌识曲") {
+                    "原生录音识别（ACRCloud 曲库），识别到直接带歌名进搜索"
                 }
                 FeatureSection("📻 每日电台") {
                     "探索版（榜单 + 随机歌单混合）、熟悉版（相似曲目推荐）；音源检测只推荐能播的歌；每日更新大半新歌"
@@ -2129,7 +2152,7 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                     "收藏 / 歌单 / 播放历史 / 搜索历史 / 循环模式 / 上次播放位置 / 主题模式 / 歌词偏移 全部跨重启保留"
                 }
                 FeatureSection("⚙️ 其他") {
-                    "深色主题、睡眠定时、自定义封面、标签编辑、歌词微调、启动曲库秒显（缓存）"
+                    "深色主题、睡眠定时、自定义封面、标签编辑、歌词微调、启动曲库秒显（缓存）；App 内双通道升级（蓝奏云 / GitHub）"
                 }
             }
         },

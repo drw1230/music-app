@@ -48,7 +48,10 @@ object GitHubUpdater {
         val name: String,
         val size: Long,
         /** GitHub API 资产端点（下载时需带 Accept: application/octet-stream） */
-        val apiUrl: String
+        val apiUrl: String,
+        /** 网页直链（browser_download_url，仅用于"分享给朋友"，App 内下载不走它——
+         *  该链接经 github.com 中转，国内手机直连会被阻断） */
+        val browserUrl: String
     )
 
     /** 最新 Release 信息 */
@@ -118,7 +121,12 @@ object GitHubUpdater {
                     val a = assets.optJSONObject(i) ?: continue
                     val name = a.optString("name", "")
                     if (!name.endsWith(".apk", ignoreCase = true)) continue
-                    apk = ApkAsset(name, a.optLong("size", 0L), a.optString("url", ""))
+                    apk = ApkAsset(
+                        name,
+                        a.optLong("size", 0L),
+                        a.optString("url", ""),
+                        a.optString("browser_download_url", "")
+                    )
                     break
                 }
             }
