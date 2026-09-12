@@ -19,13 +19,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -174,9 +175,20 @@ fun ThemeColorDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(mode, selectedColor) }) { Text("确定") }
-        },
-        dismissButton = {}
+            // 大号确认按钮：主题色填充、通栏宽度
+            Button(
+                onClick = { onConfirm(mode, selectedColor) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            ) {
+                Text("确定", fontSize = 16.sp)
+            }
+        }
     )
 }
 

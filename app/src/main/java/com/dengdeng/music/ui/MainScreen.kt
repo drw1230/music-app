@@ -190,6 +190,17 @@ fun MainScreen(
                             IconButton(onClick = { menuExpanded = true }) {
                                 Icon(Icons.Default.MoreVert, contentDescription = "更多")
                             }
+                            // 新版本提醒：⋮ 按键右上角的小圆点（颜色跟随主题色）
+                            if (hasNewVersion) {
+                                Box(
+                                    Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 9.dp, end = 9.dp)
+                                        .size(9.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
+                            }
                             DropdownMenu(
                                 expanded = menuExpanded,
                                 onDismissRequest = { menuExpanded = false }
@@ -247,11 +258,12 @@ fun MainScreen(
                                         Text("软件升级")
                                         if (hasNewVersion) {
                                             Spacer(Modifier.width(7.dp))
+                                            // 颜色跟随当前主题色（colorScheme.primary）
                                             Box(
                                                 Modifier
                                                     .size(8.dp)
                                                     .clip(CircleShape)
-                                                    .background(Color(0xFF9C6ADE))
+                                                    .background(MaterialTheme.colorScheme.primary)
                                             )
                                         }
                                     }
