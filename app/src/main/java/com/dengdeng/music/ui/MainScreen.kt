@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Language
@@ -56,6 +57,7 @@ import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,8 +84,11 @@ import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import com.dengdeng.music.data.AlbumGroup
+import com.dengdeng.music.data.GitHubUpdater
 import com.dengdeng.music.data.Playlist
 import com.dengdeng.music.data.Song
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 主界面 —— Tab 切换（全部/喜欢/歌单）+ 歌曲列表 + 底部迷你播放条
@@ -138,6 +143,25 @@ fun MainScreen(
     var upgradeMenuExpanded by remember { mutableStateOf(false) }
     // 听歌识曲界面
     var showRecognize by remember { mutableStateOf(false) }
+
+    // 新版本提醒：启动时后台查一次 GitHub 最新 Release，远端更新则点亮"软件升级"旁的小圆点
+    val appContext = LocalContext.current
+    val currentVersionName = remember {
+        try {
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: ""
+        } catch (_: Exception) { "" }
+    }
+    var hasNewVersion by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val newer = withContext(Dispatchers.IO) {
+            when (val r = GitHubUpdater.fetchLatest()) {
+                is GitHubUpdater.CheckResult.Found ->
+                    isVersionNewer(r.release.tag, currentVersionName)
+                else -> false
+            }
+        }
+        hasNewVersion = newer
+    }
 
     if (showPlayer) {
         // 播放页打开时，安卓返回键先关闭播放页回到曲库（再按返回键才退出 App）
@@ -216,8 +240,22 @@ fun MainScreen(
                                 }
                             )
                             // 软件升级（先弹二级菜单选下载源：蓝奏云网盘 / GitHub Releases）
+                            // 有新版本时，文字旁亮一个主题紫小圆点提醒
                             DropdownMenuItem(
-                                text = { Text("软件升级") },
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("软件升级")
+                                        if (hasNewVersion) {
+                                            Spacer(Modifier.width(7.dp))
+                                            Box(
+                                                Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFF9C6ADE))
+                                            )
+                                        }
+                                    }
+                                },
                                 leadingIcon = { Icon(Icons.Default.SystemUpdate, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
@@ -1760,6 +1798,23 @@ private fun SongRow(
             }
         }
     }
+}
+
+/**
+ * 版本号比较：remote 是否比 current 新。
+ * 兼容 tag 前缀（v1.2.0 / V1.2.0）与不等长段（1.2 vs 1.2.0），逐段比数字。
+ */
+private fun isVersionNewer(remote: String, current: String): Boolean {
+    fun parts(v: String) = v.trim().removePrefix("v").removePrefix("V")
+        .split('.').map { it.trim().toIntOrNull() ?: 0 }
+    val r = parts(remote)
+    val c = parts(current)
+    for (i in 0 until maxOf(r.size, c.size)) {
+        val rv = r.getOrElse(i) { 0 }
+        val cv = c.getOrElse(i) { 0 }
+        if (rv != cv) return rv > cv
+    }
+    return false
 }
 
 /** 软件升级二级菜单里的下载源选项行（名称 + 说明 + 右箭头，整行可点） */
