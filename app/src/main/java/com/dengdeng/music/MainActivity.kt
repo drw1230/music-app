@@ -173,7 +173,7 @@ class MainActivity : ComponentActivity() {
                         onDeleteSongs = { requestDeleteSongs(it) },
                         themeMode = if (effMode == 2) 2 else 1,
                         themeColorHex = effColor,
-                        colorHistory = colorHistory,
+                        colorHistory = colorHistory.ifEmpty { DEFAULT_COLOR_HISTORY },
                         onPreviewTheme = { mode, color ->
                             previewMode = mode
                             previewColor = color
