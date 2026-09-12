@@ -1,13 +1,15 @@
 package com.dengdeng.music.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 
-/** 浅色主题 —— 温暖米白基调，清爽耐看 */
+/** 浅色主题 —— 温暖米白基调，清爽耐看（官方浅紫 #6750A4） */
 private val LightColors = lightColorScheme(
     primary = Color(0xFF6750A4),
     onPrimary = Color.White,
@@ -53,13 +55,56 @@ private val DarkColors = darkColorScheme(
     outline = Color(0xFF938F99)
 )
 
+/** 官方默认主色（固定首位，不可被历史顶掉） */
+val OFFICIAL_PRIMARY_HEX = "6750A4"
+
+/**
+ * 解析 6 位 HEX 色号为 Compose Color。
+ * 接受 "RRGGBB" / "#RRGGBB"（也兼容 0x 前缀），非法返回 null。
+ */
+fun parseHexColor(s: String): Color? {
+    val t = s.trim().removePrefix("#").removePrefix("0x").removePrefix("0X")
+    if (t.length != 6) return null
+    if (t.any { it.lowercaseChar() !in "0123456789abcdef" }) return null
+    return Color(java.lang.Long.parseLong("FF$t", 16).toInt())
+}
+
+/** 把 Color 规整成 6 位大写 HEX（无 #），用于存档比较 */
+fun colorToHex(c: Color): String {
+    fun ch(v: Float) = (v.coerceIn(0f, 1f) * 255).toInt().let { "%02X".format(it) }
+    return ch(c.red) + ch(c.green) + ch(c.blue)
+}
+
+/** 浅色方案 + 自定义主色：只替换主色系（primary 一族），背景保持中性米白 */
+private fun lightSchemeWith(primary: Color): ColorScheme = LightColors.copy(
+    primary = primary,
+    onPrimary = Color.White,
+    primaryContainer = lerp(primary, Color.White, 0.82f),
+    onPrimaryContainer = lerp(primary, Color.Black, 0.65f)
+)
+
+/** 深色方案 + 自定义主色：主色提亮保证在深底上的可读性 */
+private fun darkSchemeWith(primary: Color): ColorScheme = DarkColors.copy(
+    primary = lerp(primary, Color.White, 0.45f),
+    onPrimary = lerp(primary, Color.Black, 0.72f),
+    primaryContainer = lerp(primary, Color.Black, 0.35f),
+    onPrimaryContainer = lerp(primary, Color.White, 0.88f)
+)
+
 @Composable
 fun MusicAppTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    /** 自定义主题色（null = 官方浅紫）；只替换主色系，不动中性背景 */
+    primaryColor: Color? = null,
     content: @Composable () -> Unit
 ) {
+    val scheme = if (darkTheme) {
+        primaryColor?.let { darkSchemeWith(it) } ?: DarkColors
+    } else {
+        primaryColor?.let { lightSchemeWith(it) } ?: LightColors
+    }
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = scheme,
         content = content
     )
 }

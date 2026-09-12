@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
@@ -36,10 +35,10 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
@@ -100,7 +99,11 @@ fun MainScreen(
     hasPermission: Boolean,
     onDeleteSongs: (List<android.net.Uri>) -> Unit,
     themeMode: Int,
-    onThemeModeChange: (Int) -> Unit
+    themeColorHex: String,
+    colorHistory: List<String>,
+    onPreviewTheme: (Int, String) -> Unit,
+    onConfirmTheme: (Int, String) -> Unit,
+    onCancelTheme: () -> Unit
 ) {
     // 是否显示全屏播放页
     var showPlayer by remember { mutableStateOf(false) }
@@ -133,6 +136,8 @@ fun MainScreen(
     var sortMenuExpanded by remember { mutableStateOf(false) }
     // 睡眠定时器弹窗
     var showSleepTimer by remember { mutableStateOf(false) }
+    // 主题色彩弹窗（浅色/深色 + 主题色，带预览）
+    var showThemeDialog by remember { mutableStateOf(false) }
     // 关于弹窗
     var showAbout by remember { mutableStateOf(false) }
     // 软件升级①：蓝奏云网盘下载页（App 内 WebView）
@@ -216,18 +221,13 @@ fun MainScreen(
                                     showSleepTimer = true
                                 }
                             )
-                            // 深色主题切换
+                            // 主题色彩（浅色/深色 + 主题色选择，带预览）
                             DropdownMenuItem(
-                                text = { Text("深色模式") },
-                                leadingIcon = {
-                                    Icon(
-                                        if (themeMode != 0) Icons.Default.DarkMode else Icons.Default.LightMode,
-                                        contentDescription = null
-                                    )
-                                },
+                                text = { Text("主题色彩") },
+                                leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
-                                    onThemeModeChange(if (themeMode == 0) 2 else 0)
+                                    showThemeDialog = true
                                 }
                             )
                             // 听歌识曲（原生录音 → AHA/ACRCloud 识别 → 自动带词进搜索）
@@ -478,6 +478,24 @@ fun MainScreen(
     // 软件升级：GitHub 最新版本（进来自动查 api.github.com，不走网页）
     if (showGitHubUpdate) {
         GitHubUpdateDialog(onDismiss = { showGitHubUpdate = false })
+    }
+
+    // 主题色彩弹窗：选择期间即时预览；✕/点外部 = 恢复原样；确定 = 持久化
+    if (showThemeDialog) {
+        ThemeColorDialog(
+            initialMode = if (themeMode == 2) 2 else 1,
+            currentColor = themeColorHex,
+            history = colorHistory,
+            onPreview = onPreviewTheme,
+            onConfirm = { mode, color ->
+                showThemeDialog = false
+                onConfirmTheme(mode, color)
+            },
+            onDismiss = {
+                showThemeDialog = false
+                onCancelTheme()
+            }
+        )
     }
 
     // 排序菜单（AlertDialog 形式）
