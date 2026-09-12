@@ -32,11 +32,11 @@ import javax.crypto.spec.SecretKeySpec
 object LeaderboardStore {
 
     /** 桶访问域名（外网），例：https://ddmusic-125xxxxxxx.cos.ap-chongqing.myqcloud.com */
-    const val BUCKET_URL = ""
+    const val BUCKET_URL = "https://ddmusic-1416625633.cos.ap-chongqing.myqcloud.com"
 
     /** CAM 子用户密钥（仅授权榜单桶读写）；空 = 上传不可用（只读演示） */
-    const val SECRET_ID = ""
-    const val SECRET_KEY = ""
+    const val SECRET_ID = "REDACTED_COS_ID"
+    const val SECRET_KEY = "REDACTED_COS_KEY"
 
     private const val OBJECT_KEY = "leaderboard.json"
 
