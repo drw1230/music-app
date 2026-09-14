@@ -159,6 +159,8 @@ fun MainScreen(
     var showGameCenter by remember { mutableStateOf(false) }
     // 打地鼠游戏（听歌模式）
     var showWhackMole by remember { mutableStateOf(false) }
+    // 别踩白块游戏（听歌模式：经典 / 街机 / 接力）
+    var showTileGame by remember { mutableStateOf(false) }
 
     // 新版本提醒：启动时后台查一次 GitHub 最新 Release，远端更新则点亮"软件升级"旁的小圆点
     val appContext = LocalContext.current
@@ -193,6 +195,17 @@ fun MainScreen(
         BackHandler { showWhackMole = false }
         WhackMoleScreen(
             onBack = { showWhackMole = false },
+            songs = viewModel.songs,
+            onPauseMainPlayback = { viewModel.pause() }
+        )
+        return
+    }
+
+    if (showTileGame) {
+        // 别踩白块全屏接管（同打地鼠）：early-return 脱离曲库主界面重组树，避免首帧卡顿
+        BackHandler { showTileGame = false }
+        TileGameScreen(
+            onBack = { showTileGame = false },
             songs = viewModel.songs,
             onPauseMainPlayback = { viewModel.pause() }
         )
@@ -354,7 +367,8 @@ fun MainScreen(
                 Box(Modifier.padding(padding)) {
                     GameCenterScreen(
                         onBack = { showGameCenter = false },
-                        onWhackMole = { showWhackMole = true }
+                        onWhackMole = { showWhackMole = true },
+                        onTileGame = { showTileGame = true }
                     )
                 }
             }

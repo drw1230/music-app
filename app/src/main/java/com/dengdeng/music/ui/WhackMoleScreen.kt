@@ -470,7 +470,7 @@ private fun easeOutBack(p: Float): Float {
     return 1f + (c1 + 1f) * q * q * q + c1 * q * q
 }
 
-private class HitSounds {
+internal class HitSounds {
     private val sampleRate = 44100
     private val samples = sampleRate * 90 / 1000
     private var track: AudioTrack? = null

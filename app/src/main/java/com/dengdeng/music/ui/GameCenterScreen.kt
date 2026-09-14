@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
@@ -29,12 +30,16 @@ import com.dengdeng.music.data.PlayerProfile
 /**
  * 游戏中心（小游戏入口页）
  * - 顶部玩家卡片：显示本地名字（游戏成绩/排行榜绑定它），改名引导到「我的信息」
- * - 游戏卡片区：打地鼠（可玩，听歌模式）+ 猜歌挑战（占位打磨中）
+ * - 游戏卡片区：打地鼠（可玩，听歌模式）+ 别踩白块（可玩，经典/街机/接力）+ 更多游戏（占位）
  * - 本页与「我的信息」一样隐藏底部迷你播放条（MainScreen bottomBar 条件排除）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GameCenterScreen(onBack: () -> Unit, onWhackMole: () -> Unit) {
+fun GameCenterScreen(
+    onBack: () -> Unit,
+    onWhackMole: () -> Unit,
+    onTileGame: () -> Unit
+) {
     val ctx = LocalContext.current
     var name by remember { mutableStateOf("") }
 
@@ -122,6 +127,42 @@ fun GameCenterScreen(onBack: () -> Unit, onWhackMole: () -> Unit) {
                         )
                         Text(
                             "听歌模式已上线 · 选一首本地歌跟着节奏打",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ── 别踩白块（可玩：经典 / 街机 / 接力） ──
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onTileGame() }
+            ) {
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.GridView,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text(
+                            "别踩白块",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "经典 / 街机 / 接力 · 4 轨跟着节拍点黑块，别碰白块",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
