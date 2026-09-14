@@ -7,7 +7,6 @@ import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,6 +26,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -57,10 +57,13 @@ import kotlin.math.sin
  * - 经典：前 50 块，比完成用时（用时受歌曲本身影响，同歌对比更有意义；另记平均偏差）
  * - 街机：整首歌冲最高分
  * - 接力：每 50 块为一段，段内零失误即"接上"→ 恢复 1 次失误额度、连击倍率加成；成绩 = 最长连续通过段数
- * 规则：允许 3 次失误（漏块 / 踩白块），失误有专属提示音
+ * 特殊块（用户 2026-09-14 追加）：
+ * - **长按块**：长条，按住到条尾才算完成（松手在最后 140ms 内仍算按满）；中途松手 = 断，记一次失误
+ * - **双押块**：并排两块（中间一条亮线），要两根手指同时按
+ * 规则：允许 3 次失误（漏块 / 踩白块 / 长按断），连续零失误打满 30 块回 1 次机会（额度上限始终 3）
  * 美术：像素风；方块颜色跟随 App 主题色（亮背景压深成深色块，暗背景提亮，保证对比度）
  *
- * 待做（Batch 2）：长按块 / 双押块、分模式联网排行榜、背景接 MoleArt 场景图、打地鼠主题化
+ * 待做（Batch 3）：分模式联网排行榜、背景接 MoleArt 场景图、打地鼠主题化
  */
 
 // ════════════════════════════ 模式 ════════════════════════════
@@ -73,15 +76,45 @@ internal enum class TileMode(val id: Int, val label: String, val rule: String) {
 
 // ════════════════════════════ 谱面 → 方块 ════════════════════════════
 
-/** 一个下落方块：命中时刻 + 轨道（0..3） */
-internal data class TileNote(val timeMs: Long, val lane: Int)
+/**
+ * 一个下落方块。
+ * - `holdMs > 0` → **长按块**：按住到 `timeMs + holdMs` 才算完成，中途松手算断
+ * - `pairLane >= 0` → **双押块**：与 `pairLane` 轨道上**同一时刻**的方块凑成一对，要同时按
+ */
+internal data class TileNote(
+    val timeMs: Long,
+    val lane: Int,
+    val holdMs: Long = 0L,
+    val pairLane: Int = -1
+)
 
-internal enum class NoteState { PENDING, PERFECT, GREAT, GOOD, MISS, EMPTY_TAP }
+internal enum class NoteState { PENDING, HOLDING, PERFECT, GREAT, GOOD, MISS, EMPTY_TAP }
+
+// ── 长按块 / 双押块的生成参数（用户 2026-09-14 拍板做这两个玩法）──
+/** 后方空档 ≥ 此值才值得按住（长按块占住空档） */
+private const val HOLD_MIN_GAP_MS = 1400L
+/** 长按实际时长：空档 - 500ms，再夹到这个区间 */
+private const val HOLD_MIN_MS = 900L
+private const val HOLD_MAX_MS = 2200L
+/** 两个长按块至少隔这么久（否则一段里全是长按，累手） */
+private const val HOLD_SPACING_MS = 15_000L
+/** 双押块：前后都要够空（孤立重拍）才并排加一块 */
+private const val DOUBLE_GAP_MS = 520L
+/** 两个双押至少隔这么久 */
+private const val DOUBLE_SPACING_MS = 9_000L
+/** 孤立重拍变成双押的概率（不是每个都变，避免套路化） */
+private const val DOUBLE_CHANCE = 0.55f
 
 /**
  * 由打地鼠同一套谱面（onset 锚定）生成方块，结果是确定性的（同歌同结果）：
  * - 连打（相邻峰间隔 < 350ms）→ 走相邻轨道"跑动"，像音阶爬升
  * - 稀疏（间隔 ≥ 350ms）→ 随机换轨（不与上一块同轨）
+ * - **长按块**：后面有大空档（≥1.4s）的节拍 → 按住约 0.9~2.2s（空档越长得越长），
+ *   且两个长按块至少隔 15s
+ * - **双押块**：前后都够空（≥0.52s）的孤立重拍 → 跨 2 条轨道以上并排再补一块（一眼看得出），
+ *   至少隔 9s，且只有 55% 概率变双押（不套路化）
+ *
+ * ⚠️ 改动这里的规则会让同歌谱面变化（缓存 key 不含规则版本，见 PROJECT_STATUS 的注意事项）
  */
 internal fun buildTiles(chart: ChartAnalyzer.Chart): List<TileNote> {
     val peaks = chart.events
@@ -89,11 +122,14 @@ internal fun buildTiles(chart: ChartAnalyzer.Chart): List<TileNote> {
         .sortedBy { it.timeMs }
     if (peaks.isEmpty()) return emptyList()
     val rnd = java.util.Random(chart.durationMs * 7L + peaks.size * 31L)
-    val out = ArrayList<TileNote>(peaks.size)
+    val out = ArrayList<TileNote>(peaks.size + peaks.size / 8)
     var lastLane = 1
     var dir = 1
     var lastT = -10_000L
-    for (e in peaks) {
+    var lastHoldAt = -1_000_000L
+    var lastDoubleAt = -1_000_000L
+    for (i in peaks.indices) {
+        val e = peaks[i]
         val gap = e.timeMs - lastT
         val lane = if (gap < 350L) {
             var l = lastLane + dir
@@ -109,11 +145,41 @@ internal fun buildTiles(chart: ChartAnalyzer.Chart): List<TileNote> {
             if (l == lastLane) l = (l + 1 + rnd.nextInt(3)) % 4
             l
         }
-        out.add(TileNote(e.timeMs, lane))
+        // 下一拍的间隔（最后一拍没有下一拍 → 永不做长按/双押）
+        val gapNext = if (i + 1 < peaks.size) peaks[i + 1].timeMs - e.timeMs else Long.MAX_VALUE
+
+        val holdMs = if (gapNext in HOLD_MIN_GAP_MS..(HOLD_MIN_GAP_MS * 8) &&
+            e.timeMs - lastHoldAt >= HOLD_SPACING_MS
+        ) {
+            lastHoldAt = e.timeMs
+            (gapNext - 500L).coerceIn(HOLD_MIN_MS, HOLD_MAX_MS)
+        } else {
+            0L
+        }
+
+        val asDouble = holdMs == 0L &&
+            gap >= DOUBLE_GAP_MS && gapNext >= DOUBLE_GAP_MS &&
+            e.timeMs - lastDoubleAt >= DOUBLE_SPACING_MS &&
+            rnd.nextFloat() < DOUBLE_CHANCE
+
+        if (asDouble) {
+            val lane2 = doubleLane(lane, rnd)
+            out.add(TileNote(e.timeMs, lane, 0L, lane2))
+            out.add(TileNote(e.timeMs, lane2, 0L, lane))
+            lastDoubleAt = e.timeMs
+        } else {
+            out.add(TileNote(e.timeMs, lane, holdMs))
+        }
         lastLane = lane
         lastT = e.timeMs
     }
     return out
+}
+
+/** 双押的另一条轨道：优先隔 2 条轨道（视觉上一眼看出是两个），实在不行取任意异轨 */
+private fun doubleLane(lane: Int, rnd: java.util.Random): Int {
+    val far = (0..3).filter { abs(it - lane) >= 2 }
+    return if (far.isNotEmpty()) far[rnd.nextInt(far.size)] else (0..3).first { it != lane }
 }
 
 // ════════════════════════════ 引擎（纯逻辑） ════════════════════════════
@@ -131,6 +197,19 @@ internal class TileEngine(
         const val MAX_MISS = 3
         const val CLASSIC_TILES = 50
         const val SEGMENT_TILES = 50
+
+        /** 长按块：在这个宽限内松手仍算按满 */
+        const val HOLD_RELEASE_GRACE_MS = 140L
+        /** 长按按满的额外奖励分（基础分之外） */
+        const val HOLD_BONUS = 60L
+        /**
+         * 失误额度恢复节奏（用户 2026-09-14："打到多少之后可以回一次机会，总数不超过三次"）。
+         * 定 **30 块**：经典一局只有 50 块（最多回 1 次，不会让经典失去压力）；
+         * 街机一首 4 分钟约 250 块（理论最多 8 次，但**必须连续零失误**才累计，
+         * 断一次就从头数 —— 既给容错又不放水）。20 太松（街机可回 12 次）、50 太紧（经典等于拿不到）。
+         * 想改用 `RECOVER_TILES`；想改成"按分数恢复"就在这里加个分数阈值。
+         */
+        const val RECOVER_TILES = 30
     }
 
     /** 本局要打的方块（经典模式只取前 50 块） */
@@ -140,6 +219,13 @@ internal class TileEngine(
 
     private val states = Array(notes.size) { mutableStateOf(NoteState.PENDING) }
     private val judgedAt = LongArray(notes.size) { -1L }
+    /** 长按块的结束时刻 */
+    private val holdEnds = LongArray(notes.size) { notes[it].timeMs + notes[it].holdMs }
+    /** 每条轨道上正在被按住的长按块下标（-1 = 没有） */
+    private val holdLanes = IntArray(4) { -1 }
+    /** 长按"咬住"时头部的判定档位（按满时用它结算，避免头部先给分、断了又扣） */
+    private val holdHead = arrayOfNulls<NoteState>(notes.size)
+    private var hitSinceRecover = 0
 
     var now by mutableStateOf(startMs); private set
     var finished by mutableStateOf(false); private set
@@ -152,6 +238,9 @@ internal class TileEngine(
     var good = 0; private set
     var hitTiles = 0; private set
     var missCount = 0; private set                            // 0..3（失误额度）
+    var recoveredCount = 0; private set                       // 本局已恢复过的机会次数
+    /** 距离下一次恢复还差多少块（UI 显示"再连打 N 块回 1 次机会"） */
+    var hitToRecover = RECOVER_TILES; private set
     var relayStreak = 0; private set                          // 接力：当前连续段数
     var relayMaxStreak = 0; private set
     var relaySegments = 0; private set                        // 接力：已走完的段数（含失败段）
@@ -201,6 +290,9 @@ internal class TileEngine(
         combo = 0
         missCount++
         segMissed = true
+        // 恢复机会要求"连续零失误"：断一次就从 0 重新数
+        hitSinceRecover = 0
+        hitToRecover = RECOVER_TILES
         showBanner(if (reason == NoteState.EMPTY_TAP) "踩白块！" else "漏了！")
         resolved++
         segProgress++
@@ -209,6 +301,23 @@ internal class TileEngine(
             finished = true
         }
         advanceSegment()
+    }
+
+    /**
+     * 每命中一块都要过这里：连续零失误满 [RECOVER_TILES] 块 → 回 1 次失误额度。
+     * 满 3 次时不需要回（有缺口才回），所以不会"记账白费"。
+     */
+    private fun noteHitForRecover() {
+        hitSinceRecover++
+        hitToRecover = RECOVER_TILES - hitSinceRecover
+        if (hitSinceRecover < RECOVER_TILES) return
+        hitSinceRecover = 0
+        hitToRecover = RECOVER_TILES
+        if (missCount > 0) {
+            missCount--
+            recoveredCount++
+            showBanner("零失误 $RECOVER_TILES 块 · 回 1 次机会")
+        }
     }
 
     /** 接力：每段结束结算（零失误 → 接上，恢复 1 次失误额度） */
@@ -232,6 +341,11 @@ internal class TileEngine(
     fun tick(nowMs: Long) {
         if (finished) return
         now = nowMs
+        // 长按块：按满尾点就结算（手指还按着；提前松手由 releaseLane 判断）
+        for (lane in 0..3) {
+            val i = holdLanes[lane]
+            if (i >= 0 && nowMs >= holdEnds[i]) completeHold(i, lane)
+        }
         for (i in 0 until notes.size) {
             if (states[i].value != NoteState.PENDING) continue
             val t = notes[i].timeMs
@@ -245,7 +359,68 @@ internal class TileEngine(
         }
     }
 
-    /** 点某条轨道。@return (判定档位, 得分/0, 是否失误) */
+    /** 手指抬起。只有长按块在乎这个 —— 松手在尾点前 [HOLD_RELEASE_GRACE_MS] 内仍算按满 */
+    fun releaseLane(lane: Int, tapMs: Long) {
+        val i = holdLanes[lane]
+        if (i < 0) return
+        if (tapMs >= holdEnds[i] - HOLD_RELEASE_GRACE_MS) completeHold(i, lane)
+        else breakHold(i, lane)
+    }
+
+    /** 长按按满：分数/连击/命中数都在这一刻结算（头部只"咬住"，不给分） */
+    private fun completeHold(i: Int, lane: Int) {
+        holdLanes[lane] = -1
+        if (states[i].value != NoteState.HOLDING) return
+        val st = holdHead[i] ?: NoteState.GOOD
+        holdHead[i] = null
+        judgedAt[i] = SystemClock.elapsedRealtime()
+        states[i].value = st
+        combo++
+        if (combo > maxCombo) maxCombo = combo
+        val base = when (st) {
+            NoteState.PERFECT -> 100
+            NoteState.GREAT -> 80
+            else -> 50
+        }
+        score += (base * comboMultiplier()).toLong() + HOLD_BONUS
+        hitTiles++
+        when (st) {
+            NoteState.PERFECT -> perfect++
+            NoteState.GREAT -> great++
+            else -> good++
+        }
+        resolved++
+        segProgress++
+        if (firstHitMs < 0) firstHitMs = notes[i].timeMs
+        lastHitMs = holdEnds[i]
+        noteHitForRecover()
+        if (mode == TileMode.CLASSIC && hitTiles >= CLASSIC_TILES) finished = true
+        advanceSegment()
+    }
+
+    /** 长按中途松手 → 断，记一次失误 */
+    private fun breakHold(i: Int, lane: Int) {
+        holdLanes[lane] = -1
+        if (states[i].value != NoteState.HOLDING) return
+        holdHead[i] = null
+        states[i].value = NoteState.MISS
+        judgedAt[i] = SystemClock.elapsedRealtime()
+        combo = 0
+        missCount++
+        segMissed = true
+        hitSinceRecover = 0
+        hitToRecover = RECOVER_TILES
+        showBanner(if (missCount >= MAX_MISS) "长按断了！失误用尽" else "长按断了！")
+        resolved++
+        segProgress++
+        if (missCount >= MAX_MISS) {
+            failed = true
+            finished = true
+        }
+        advanceSegment()
+    }
+
+    /** 按下某条轨道。@return (判定档位, 得分/0, 是否失误) */
     fun tap(lane: Int, tapMs: Long): Triple<NoteState, Long, Boolean> {
         if (finished) return Triple(NoteState.PENDING, 0L, false)
         var bestIdx = -1
@@ -264,6 +439,8 @@ internal class TileEngine(
             missCount++
             combo = 0
             segMissed = true
+            hitSinceRecover = 0
+            hitToRecover = RECOVER_TILES
             showBanner(if (missCount >= MAX_MISS) "踩白块！失误用尽" else "踩白块！")
             if (missCount >= MAX_MISS) {
                 failed = true
@@ -275,6 +452,14 @@ internal class TileEngine(
             bestDev <= PERFECT_MS -> NoteState.PERFECT
             bestDev <= GREAT_MS -> NoteState.GREAT
             else -> NoteState.GOOD
+        }
+        if (notes[bestIdx].holdMs > 0L) {
+            // 长按块：头部先"咬住"，分数/连击等按满再结算（断了就不给分，避免先给后扣）
+            states[bestIdx].value = NoteState.HOLDING
+            holdHead[bestIdx] = st
+            holdLanes[lane] = bestIdx
+            judgedAt[bestIdx] = SystemClock.elapsedRealtime()
+            return Triple(st, 0L, false)
         }
         states[bestIdx].value = st
         judgedAt[bestIdx] = SystemClock.elapsedRealtime()
@@ -299,10 +484,14 @@ internal class TileEngine(
         lastHitMs = tapMs
         resolved++
         segProgress++
+        noteHitForRecover()
         if (mode == TileMode.CLASSIC && hitTiles >= CLASSIC_TILES) finished = true
         advanceSegment()
         return Triple(st, pts, false)
     }
+
+    /** 该方块此刻是否正被按住（绘制用） */
+    fun isHolding(i: Int): Boolean = states[i].value == NoteState.HOLDING
 }
 
 // ════════════════════════════ 主题色取色 ════════════════════════════
@@ -562,7 +751,7 @@ private fun TileHomeScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Text(
-                "4 条轨道 · 白块别碰 · 黑色方块跟着歌曲节拍下落，块底落到底就点掉",
+                "4 条轨道 · 白块别碰 · 黑色方块跟着歌曲节拍下落，块底落到底就点掉；长条要按住、并排两块要同时按",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -629,7 +818,7 @@ private fun TileHomeScreen(
 
             Spacer(Modifier.height(10.dp))
             Text(
-                "规则：允许 3 次失误（漏块或踩到白块），失误用尽即结束。经典模式只取前 50 块。",
+                "规则：允许 3 次失误（漏块、踩白块、长按中途松手），失误用尽即结束；连续 30 块零失误回 1 次机会（上限始终 3 次）。经典模式只取前 50 块。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -854,17 +1043,38 @@ private fun TilePlayScreen(
             Modifier
                 .fillMaxSize()
                 .pointerInput(gameKey) {
-                    detectTapGestures { offset ->
-                        if (phase != TilePhase.PLAY || paused) return@detectTapGestures
-                        val laneW = size.width / 4f
-                        val lane = (offset.x / laneW).toInt().coerceIn(0, 3)
-                        val res = engine.tap(lane, engine.now)
-                        val (st, _, isMiss) = res
-                        when {
-                            isMiss -> sounds.play(MISS_FREQ, 0.5f, 0)
-                            st == NoteState.PERFECT -> sounds.play(laneFreq(lane), 0.45f, 0)
-                            st == NoteState.GREAT -> sounds.play(laneFreq(lane) * 0.9f, 0.4f, 0)
-                            else -> sounds.play(laneFreq(lane) * 0.8f, 0.35f, 0)
+                    // 多指按下/抬起。**不能用 detectTapGestures**：
+                    // ① 它只在手指抬起后才回调 → 长按块没法做（需要"按住"这个状态）
+                    // ② 它按手指串行处理 → 双押的第二根手指要等第一根抬起才轮到
+                    // 这里逐个 PointerEvent 遍历 changes，几根手指同时按都能各自立刻判定，
+                    // 并且抬起时通知引擎（长按块靠它判断有没有提前松手）。
+                    val laneW = size.width / 4f
+                    awaitPointerEventScope {
+                        val laneOf = HashMap<PointerId, Int>()
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            for (ch in ev.changes) {
+                                val held = laneOf[ch.id]
+                                if (ch.pressed) {
+                                    if (held != null) continue
+                                    val lane = (ch.position.x / laneW).toInt().coerceIn(0, 3)
+                                    laneOf[ch.id] = lane
+                                    if (phase == TilePhase.PLAY && !paused) {
+                                        val (st, _, isMiss) = engine.tap(lane, engine.now)
+                                        when {
+                                            isMiss -> sounds.play(MISS_FREQ, 0.5f, 0)
+                                            st == NoteState.PERFECT -> sounds.play(laneFreq(lane), 0.45f, 0)
+                                            st == NoteState.GREAT -> sounds.play(laneFreq(lane) * 0.9f, 0.4f, 0)
+                                            else -> sounds.play(laneFreq(lane) * 0.8f, 0.35f, 0)
+                                        }
+                                    }
+                                } else if (held != null) {
+                                    laneOf.remove(ch.id)
+                                    if (phase == TilePhase.PLAY && !paused) {
+                                        engine.releaseLane(held, engine.now)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -913,17 +1123,27 @@ private fun TilePlayScreen(
                 }
                 Spacer(Modifier.width(12.dp))
             }
-            // 失误额度（3 颗方块，暗掉 = 已用）
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                repeat(TileEngine.MAX_MISS) { i ->
-                    Box(
-                        Modifier
-                            .padding(end = 4.dp)
-                            .size(12.dp)
-                            .background(
-                                if (i < engine.missLeft) palette.bad else palette.bad.copy(alpha = 0.18f),
-                                RoundedCornerShape(2.dp)
-                            )
+            // 失误额度（3 颗方块，暗掉 = 已用）+ 恢复进度提示
+            Column(horizontalAlignment = Alignment.End) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    repeat(TileEngine.MAX_MISS) { i ->
+                        Box(
+                            Modifier
+                                .padding(end = 4.dp)
+                                .size(12.dp)
+                                .background(
+                                    if (i < engine.missLeft) palette.bad else palette.bad.copy(alpha = 0.18f),
+                                    RoundedCornerShape(2.dp)
+                                )
+                        )
+                    }
+                }
+                // 有缺口时才提示"还差多少块回一次机会"
+                if (engine.missLeft < TileEngine.MAX_MISS) {
+                    Text(
+                        "连打 ${engine.hitToRecover} 块回 1",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -966,7 +1186,7 @@ private fun TilePlayScreen(
                     fontSize = 52.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Text("黑块到底就点 · 白块别碰", style = MaterialTheme.typography.bodySmall)
+                Text("黑块到底就点 · 长条按住不舍手 · 并排两块一起点", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -1029,7 +1249,8 @@ private fun TilePlayScreen(
                     Text(head, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "完美 ${engine.perfect} · 精彩 ${engine.great} · 良好 ${engine.good} · 失误 ${engine.missCount}",
+                        "完美 ${engine.perfect} · 精彩 ${engine.great} · 良好 ${engine.good} · 失误 ${engine.missCount}" +
+                            if (engine.recoveredCount > 0) " · 回机会 ${engine.recoveredCount} 次" else "",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Text(
@@ -1191,18 +1412,83 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
 
     val nowRt = SystemClock.elapsedRealtime()
 
+    // ── 双押块：一对块之间拉一条横向细线（先画线，再画块，避免线压住块）──
+    for (i in 0 until engine.notes.size) {
+        val n = engine.notes[i]
+        if (n.pairLane <= n.lane) continue            // 每对只画一次
+        if (engine.stateOf(i) != NoteState.PENDING) continue
+        val y = hitY - ((n.timeMs - now) * pxPerMs).toInt()
+        if (y - noteH > h || y < -noteH) continue
+        val x0 = n.lane * laneWi + laneWi / 2f
+        val x1 = n.pairLane * laneWi + laneWi / 2f
+        drawRect(
+            p.hitLine.copy(alpha = 0.85f),
+            topLeft = Offset(x0, y - noteH * 0.5f),
+            size = Size(x1 - x0, 4f)
+        )
+    }
+
     for (i in 0 until engine.notes.size) {
         val n = engine.notes[i]
         val dt = n.timeMs - now
         val y = hitY - (dt * pxPerMs).toInt()
+        // 长按条向上延伸 holdPx，所以要按"条的尾端"来裁
+        val holdPx = n.holdMs * pxPerMs
         // 上方留一个块高、下方多留一点（判定后块还会继续滑出去一点）
-        if (y - noteH > h || y < -noteH) continue
+        if ((y - holdPx) - noteH > h || y < -noteH) continue
 
         val st = engine.stateOf(i)
         val jAt = engine.judgedAtOf(i)
         val laneX = n.lane * laneWi + 1
         val boxW = (laneWi - 2).coerceAtLeast(8)
         val top = (y - noteH).toFloat()
+
+        // ── 长按块 ──
+        if (n.holdMs > 0L && (st == NoteState.PENDING || st == NoteState.HOLDING)) {
+            val barW = (boxW - 6).coerceAtLeast(4).toFloat()
+            val barX = laneX + 3f
+            if (st == NoteState.HOLDING) {
+                // 按住中：头吸在判定线上，尾巴继续下落 → 条从头部被"吃掉"
+                val remainPx = (((n.timeMs + n.holdMs) - now) * pxPerMs).toFloat()
+                val tailY = hitY - remainPx
+                if (remainPx > 2f && tailY < h) {
+                    drawRect(
+                        p.hitLine.copy(alpha = 0.55f),
+                        topLeft = Offset(barX, tailY),
+                        size = Size(barW, (hitY - tailY).coerceAtLeast(2f))
+                    )
+                }
+                // 判定线上的锚点：轻微脉动（用墙钟 bgMs，纯绘制，不影响逻辑）
+                val pulse = (0.72f + 0.28f * sin(bgMs / 120f)).coerceIn(0f, 1f)
+                drawRect(
+                    p.block.copy(alpha = pulse),
+                    topLeft = Offset(laneX.toFloat(), hitY - noteH * 0.45f),
+                    size = Size(boxW.toFloat(), noteH * 0.45f)
+                )
+            } else {
+                val tailY = y - holdPx
+                if (tailY < h) {
+                    // 主体是一根"条"（比普通块窄），头部按普通块宽度加厚 → 一眼看出按点
+                    drawRect(
+                        p.block,
+                        topLeft = Offset(barX, tailY),
+                        size = Size(barW, holdPx.coerceAtLeast(2f))
+                    )
+                    drawRect(
+                        p.block,
+                        topLeft = Offset(laneX.toFloat(), top),
+                        size = Size(boxW.toFloat(), noteH.toFloat())
+                    )
+                    // 尾端一道亮线：提示"要按到这里"
+                    drawRect(
+                        p.hitLine.copy(alpha = 0.9f),
+                        topLeft = Offset(laneX.toFloat(), tailY),
+                        size = Size(boxW.toFloat(), 3f)
+                    )
+                }
+            }
+            continue
+        }
 
         if (st == NoteState.PENDING) {
             drawRect(
@@ -1211,7 +1497,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
                 size = Size(boxW.toFloat(), noteH.toFloat())
             )
         } else if (st == NoteState.MISS) {
-            // 漏块：短暂泛红后消失（不给残影，保持画面干净）
+            // 漏块 / 长按断了：短暂泛红后消失（不给残影，保持画面干净）
             val age = if (jAt > 0) nowRt - jAt else 999L
             if (age < 190) {
                 drawRect(
