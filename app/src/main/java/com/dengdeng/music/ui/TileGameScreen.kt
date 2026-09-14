@@ -3,6 +3,7 @@ package com.dengdeng.music.ui
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -155,7 +156,9 @@ internal class TileEngine(
     var relayMaxStreak = 0; private set
     var relaySegments = 0; private set                        // 接力：已走完的段数（含失败段）
     var banner by mutableStateOf(""); private set             // 短暂提示（接上 / 失误）
-    var bannerAt = 0L; private set
+    // bannerAt 也做成状态：提示条只订阅它就能在**每次** showBanner 时刷新
+    // （banner 文案连续两次相同时字符串相等 → 不会触发状态变更，光靠 banner 会漏刷新）
+    var bannerAt by mutableStateOf(0L); private set
     private var bannerId = 0
 
     private var firstHitMs = -1L
@@ -731,7 +734,10 @@ private fun TilePlayScreen(
     // 难度已整体上调（用户 2026-09-14 反馈太简单）→ 现在再叠一层「速度递增」：
     // 经典按块数进度、街机按对局时间，从起手速度加速到该档位极限；
     // 接力不递增，保持固定档位。speedMs 越小 = 反应窗口越窄。
-    val speedMs = when (mode) {
+    // ⚠️ 必须是「函数」而不是组合阶段的 val：这两个输入每帧都在变，在 composable 体内读
+    // 它 = 整屏每秒重组 120 次（真机实测 22% 掉帧、UI 线程 7ms，预算只有 8.33ms）。
+    // 传给 Canvas 的 draw lambda，在**绘制阶段**调用 → 只重绘画布、不触发重组。
+    fun currentSpeedMs(): Long = when (mode) {
         TileMode.CLASSIC -> rampSpeedMs(
             speed,
             engine.hitTiles.toFloat() / TileEngine.CLASSIC_TILES
@@ -759,8 +765,13 @@ private fun TilePlayScreen(
     var countdown by remember(gameKey) { mutableStateOf(3) }
     var paused by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    var frameNow by remember { mutableStateOf(0L) }
-    var bannerTick by remember { mutableStateOf(0) }   // 触发 banner 重绘
+    // 背景渐变刷子按配色缓存一次复用（每帧 new 一个 Brush = 每帧重建 Skia 渐变 shader）
+    // 不传 startY/endY → 默认铺满 drawRect 的区域，所以不用等 Canvas 尺寸
+    val bgBrush = remember(palette) {
+        Brush.verticalGradient(listOf(palette.bgTop, palette.bgBottom))
+    }
+    // 星星动效时钟（毫秒）：**只被绘制阶段读取** → 每帧只重绘、不触发重组
+    var bgTime by remember { mutableStateOf(0L) }
     var reported by remember(gameKey) { mutableStateOf(false) }
 
     fun finishGame() {
@@ -800,15 +811,25 @@ private fun TilePlayScreen(
         if (phase == TilePhase.PLAY) {
             while (isActive) {
                 val pos = (player.currentPosition - latencyMs).coerceAtLeast(0L)
-                engine.tick(pos)
-                frameNow = pos
-                bannerTick = engine.bannerAt.toInt()
+                engine.tick(pos)   // tick 内部写 engine.now（Compose 状态）→ 只重绘画布
                 if (engine.finished || player.playbackState == Player.STATE_ENDED) {
                     finishGame()
                     break
                 }
-                delay(16)
+                // 帧时钟（vsync）而不是 delay(16)：delay 是计时器、不对齐 vsync，
+                // 真机实测内容每秒只更新 57.4 次
+                withFrameNanos { }
             }
+        }
+    }
+
+    // 🔥 专职「重绘时钟」（对齐打地鼠的结构）：打地鼠稳定 120.0fps，是因为它除了游戏循环
+    // 还有一个一直在跑的 withInfiniteAnimationFrameNanos（刷背景时钟）。单独一个帧回调
+    // 一旦续订晚一拍，这一帧就没人再请求了 → IntendedVsync 从 8.3 跳到 16.7ms（白块实测 22%）。
+    // 这个循环只写一个只被**绘制阶段**读的状态（星星动效），不参与重组。
+    LaunchedEffect(Unit) {
+        while (true) {
+            withInfiniteAnimationFrameNanos { bgTime = it / 1_000_000L }
         }
     }
 
@@ -848,7 +869,9 @@ private fun TilePlayScreen(
                     }
                 }
         ) {
-            drawTileField(engine, palette, frameNow, speedMs)
+            // 这里读到的 now / speed 都发生在绘制阶段（不再让整屏每帧重组）：
+            // engine.now 是 Compose 状态 → 它一变只让这块画布失效重绘
+            drawTileField(engine, palette, bgBrush, { engine.now }, { currentSpeedMs() }, { bgTime })
         }
 
         // ── 顶部信息条（浮层：黑块会从文字下穿过，所以垫一层半透明底衬保证可读） ──
@@ -917,24 +940,14 @@ private fun TilePlayScreen(
         }
 
         // ── 提示条（接上 / 失误） ──
-        val sinceBanner = SystemClock.elapsedRealtime() - engine.bannerAt
-        if (engine.banner.isNotBlank() && sinceBanner < 900) {
-            val alpha = 1f - sinceBanner / 900f
-            Text(
-                engine.banner,
-                fontWeight = FontWeight.Bold,
-                color = if (engine.banner.startsWith("接上")) palette.hitLine else palette.bad,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 74.dp)
-                    .background(
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.7f * alpha),
-                        RoundedCornerShape(8.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            )
-        }
+        // 独立 composable：以前靠整屏每帧重组顺带淡出，现在整屏不再每帧重组，
+        // 就由它自己在**显示期间**按 ~16 次/秒 刷新（不显示时完全不刷新）
+        TileBanner(
+            engine = engine,
+            hitColor = palette.hitLine,
+            badColor = palette.bad,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
 
         // ── 倒计时 ──
         if (phase == TilePhase.COUNTDOWN) {
@@ -1045,6 +1058,49 @@ private fun TilePlayScreen(
     }
 }
 
+/**
+ * 「接上 / 失误」提示条：显示 900ms 内逐渐淡出。
+ *
+ * 单独抽成 composable 是为了把刷新限制在这一个小节点内 —— 主对局页已经不再每帧重组
+ * （见 TilePlayScreen 里 currentSpeedMs 的注释），如果还用父级状态去驱动淡出，
+ * 就会把整屏重新拉回每秒 120 次重组的老路。
+ */
+@Composable
+private fun TileBanner(
+    engine: TileEngine,
+    hitColor: Color,
+    badColor: Color,
+    modifier: Modifier = Modifier
+) {
+    var nowRt by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    val since = nowRt - engine.bannerAt
+    val visible = engine.banner.isNotBlank() && since < 900
+
+    // 只在显示期间小步刷新（60ms ≈ 16 次/秒，淡出足够顺滑；不显示时不占任何开销）
+    LaunchedEffect(engine.banner, visible) {
+        while (visible && isActive) {
+            delay(60)
+            nowRt = SystemClock.elapsedRealtime()
+        }
+    }
+    if (!visible) return
+
+    val alpha = (1f - since / 900f).coerceIn(0f, 1f)
+    Text(
+        engine.banner,
+        fontWeight = FontWeight.Bold,
+        color = if (engine.banner.startsWith("接上")) hitColor else badColor,
+        modifier = modifier
+            .statusBarsPadding()
+            .padding(top = 74.dp)
+            .background(
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.7f * alpha),
+                RoundedCornerShape(8.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    )
+}
+
 private const val MISS_FREQ = 98f
 
 private fun laneFreq(lane: Int): Float = when (lane) {
@@ -1078,9 +1134,15 @@ private fun rememberTilePalette(): TilePalette {
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
     engine: TileEngine,
     p: TilePalette,
-    now: Long,
-    speedMs: Long
+    bgBrush: Brush,
+    nowProvider: () -> Long,
+    speedProvider: () -> Long,
+    bgProvider: () -> Long
 ) {
+    // 这三个值每帧都在变，所以**只能在绘制阶段读**（见调用处注释）：在 composable 体内
+    // 求值会让整屏每秒重组 120 次，真机实测 UI 线程 7ms、22% 掉帧（预算只有 8.33ms）
+    val now = nowProvider()
+    val bgMs = bgProvider()
     val w = size.width
     val h = size.height
     val laneWi = (w / 4f).toInt().coerceAtLeast(1)
@@ -1090,14 +1152,16 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
     // （0.46 倍太薄 → 正方形太方 → 用户 2026-09-14 定：竖向长边黄金比例）
     val noteH = (laneWi * 1.618f).toInt()
         .coerceIn(60, (h * 0.30f).toInt().coerceAtLeast(60))
-    val pxPerMs = hitY.toFloat() / speedMs.toFloat()
+    val pxPerMs = hitY.toFloat() / speedProvider().coerceAtLeast(1L).toFloat()
 
-    // ① 浅色渐变底（主题色相，上淡下略深；必须浅，不能压过黑块）
-    drawRect(brush = Brush.verticalGradient(listOf(p.bgTop, p.bgBottom), startY = 0f, endY = h))
+    // ① 浅色渐变底（刷子由调用方按尺寸缓存后传入 —— 每帧 new 一个 Brush 会
+    //    每帧重建一次 Skia 渐变 shader，是掉帧的主因之一）
+    drawRect(brush = bgBrush)
 
     // ② 背景小星星：上浮 + 闪烁（像素方块，压在轨道线之下）
     // 边长按屏宽比例算（不写死像素，否则高分辨率屏上小到看不见）
-    val tSec = now / 1000f
+    // 用独立的墙钟 bgMs（不是歌曲位置）→ 暂停/倒计时时星星也在动（同打地鼠背景）
+    val tSec = bgMs / 1000f
     for (s in 0 until TILE_STAR_COUNT) {
         val bx = TILE_STARS[s * 7]
         val by = TILE_STARS[s * 7 + 1]

@@ -1466,7 +1466,11 @@ private fun WhackMoleGameScreen(
                     finishGame()
                     break
                 }
-                delay(16)
+                // 🔥 用帧时钟对齐 vsync，不要用 delay(16)：
+                // 本文件的背景循环本来就用了 withInfiniteAnimationFrameNanos（实测 120.0fps），
+                // 但地鼠/浮动文字/粒子由这个循环驱动——原来 delay(16) 让它们只有 ~57fps，
+                // 于是"背景 120 + 地鼠 60"两种节奏混在一起，反而更别扭
+                withFrameNanos { }
             }
         }
     }
