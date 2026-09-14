@@ -321,28 +321,34 @@ internal class TilePalette(
 
 /**
  * 背景小星星表（确定性生成一次，运行时只按时间算位置/亮度 → 不会每帧乱跳）。
- * 每颗 6 个数：x(0..1) y(0..1) 边长px 相位 速度 基础亮度
+ * 每颗 7 个数：x(0..1) y(0..1) 边长(屏宽比例) 相位 闪烁速度 上浮速度 基础亮度
+ *
+ * ⚠️ 2026-09-14 返工：旧版边长写死 2~4 **像素**（1440 宽屏上只有 0.2mm）、亮度上限 0.45、
+ * 闪烁周期 9~35 秒 → 用户反馈"背景没有动态效果"。现在边长按屏宽比例算（≈6~17px）、
+ * 亮度上限 0.78、闪烁周期 1.4~3.5s、上浮 60~200px/s，肉眼一眼能看出在动。
  */
+private const val TILE_STAR_COUNT = 40
+
 private val TILE_STARS: FloatArray = run {
     val rnd = java.util.Random(20260914L)
-    val n = 34
-    FloatArray(n * 6) { i ->
-        when (i % 6) {
-            0 -> rnd.nextFloat()                     // x
-            1 -> rnd.nextFloat()                     // y
-            2 -> 2f + rnd.nextInt(3)                 // 边长 2~4px（像素风）
-            3 -> rnd.nextFloat() * 6.2832f           // 相位
-            4 -> 0.18f + rnd.nextFloat() * 0.50f     // 闪烁 + 上浮速度
-            else -> 0.12f + rnd.nextFloat() * 0.30f  // 基础亮度（浅底上要很淡）
+    FloatArray(TILE_STAR_COUNT * 7) { i ->
+        when (i % 7) {
+            0 -> rnd.nextFloat()                          // x
+            1 -> rnd.nextFloat()                          // y
+            2 -> 0.0045f + rnd.nextFloat() * 0.0075f      // 边长：屏宽 0.45%~1.2%
+            3 -> rnd.nextFloat() * 6.2832f                // 相位
+            4 -> 0.9f + rnd.nextFloat() * 2.4f            // 闪烁速度（周期 ≈1.4~3.5s）
+            5 -> 0.020f + rnd.nextFloat() * 0.045f        // 上浮速度（屏高/秒）
+            else -> 0.30f + rnd.nextFloat() * 0.45f       // 基础亮度
         }
     }
 }
 
 /**
  * 经典《别踩白块儿》配色（用户 2026-09-14 定稿版）：
- * - 底色 = 主题色相生成的**浅色渐变**（上淡下略深）——必须偏浅，否则会压过黑块的视觉
- * - 轨道分隔线 = **白色**（靠渐变上下的色差显出来，浅底上本来就是若隐若现的分割感）
- * - 背景叠一层**动态小星星**（缓慢上浮 + 呼吸式明暗），用主题色深调 + 低透明度
+ * - 底色 = 主题色相生成的**浅色渐变**（顶近乎白 → 底中等亮主题色，明度差 ≈82 灰阶）
+ * - 轨道分隔线 = **白色**（靠渐变上下的色差显出来）
+ * - 背景叠一层**动态小星星**（上浮 + 闪烁，边长按屏宽比例 ~6~17px）
  * - 方块 = 纯黑（亮底）/ 近白（暗底）—— 经典钢琴块就是黑白两色，不掺主题色
  */
 internal fun buildTilePalette(primary: Color, background: Color): TilePalette {
@@ -357,17 +363,19 @@ internal fun buildTilePalette(primary: Color, background: Color): TilePalette {
 
     val hue = hsv[0]
     val sat = hsv[1].let { if (it < 0.12f) 0.35f else it }
-    // 亮底：整体明度都压在 0.86 以上（浅），但上下留 0.11 落差 → 白线才有戏
-    // 暗底：同样思路反过来（0.085~0.195），白线靠"比底亮"显示
-    val vTop = if (bgLight) 0.972f else 0.085f
-    val vBot = if (bgLight) 0.862f else 0.195f
+    // 亮底：顶近乎白（只有一丝主题色）→ 底压到中等亮的主题色，明度差 ≈82 灰阶
+    // 暗底：反过来（0.075 → 0.230）
+    // ⚠️ 旧值 0.972→0.862 只差 39 灰阶，手机实测"看不出渐变"（用户 2026-09-14 反馈）
+    // 即便压到 0.76，纯黑方块对比度仍有 ~6.6:1，不会影响黑块的辨识
+    val vTop = if (bgLight) 0.985f else 0.075f
+    val vBot = if (bgLight) 0.760f else 0.230f
 
     val block = if (bgLight) Color(0xFF0A0A0A) else Color(0xFFF7F7F7)
 
     return TilePalette(
-        bgTop = hsl(hue, sat * 0.24f, vTop),
-        bgBottom = hsl(hue, sat * 0.48f, vBot),
-        star = hsl(hue, sat * 0.85f, if (bgLight) 0.66f else 0.92f),
+        bgTop = hsl(hue, sat * 0.18f, vTop),
+        bgBottom = hsl(hue, sat * 0.68f, vBot),
+        star = hsl(hue, sat * 0.90f, if (bgLight) 0.52f else 0.94f),
         block = block,
         blockTop = block,
         blockBottom = block,
@@ -1087,18 +1095,20 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
     // ① 浅色渐变底（主题色相，上淡下略深；必须浅，不能压过黑块）
     drawRect(brush = Brush.verticalGradient(listOf(p.bgTop, p.bgBottom), startY = 0f, endY = h))
 
-    // ② 背景小星星：缓慢上浮 + 呼吸式明暗（像素方块，压在轨道线之下）
+    // ② 背景小星星：上浮 + 闪烁（像素方块，压在轨道线之下）
+    // 边长按屏宽比例算（不写死像素，否则高分辨率屏上小到看不见）
     val tSec = now / 1000f
-    for (s in 0 until TILE_STARS.size / 6) {
-        val bx = TILE_STARS[s * 6]
-        val by = TILE_STARS[s * 6 + 1]
-        val sz = TILE_STARS[s * 6 + 2]
-        val ph = TILE_STARS[s * 6 + 3]
-        val sp = TILE_STARS[s * 6 + 4]
-        val base = TILE_STARS[s * 6 + 5]
-        val yNorm = ((by - tSec * 0.010f * sp) % 1f + 1f) % 1f
-        val a = (base * (0.30f + 0.70f * abs(sin(tSec * sp + ph)))).coerceIn(0f, 0.45f)
-        if (a <= 0.012f) continue
+    for (s in 0 until TILE_STAR_COUNT) {
+        val bx = TILE_STARS[s * 7]
+        val by = TILE_STARS[s * 7 + 1]
+        val sz = (TILE_STARS[s * 7 + 2] * w).coerceAtLeast(3f)
+        val ph = TILE_STARS[s * 7 + 3]
+        val tw = TILE_STARS[s * 7 + 4]
+        val dp = TILE_STARS[s * 7 + 5]
+        val base = TILE_STARS[s * 7 + 6]
+        val yNorm = ((by - tSec * dp) % 1f + 1f) % 1f
+        val a = (base * (0.25f + 0.75f * abs(sin(tSec * tw + ph)))).coerceIn(0f, 0.78f)
+        if (a <= 0.02f) continue
         drawRect(
             p.star.copy(alpha = a),
             topLeft = Offset((bx * w).toInt().toFloat(), (yNorm * h).toInt().toFloat()),

@@ -651,9 +651,9 @@ internal class HitSounds {
     }
 
     // ────────── 专属音效（炸弹 / 加分鼠） ──────────
-    // 与按键音分开独立缓冲：这两类音效比按键音长得多（320ms vs 90ms），
+    // 与按键音分开独立缓冲：这两类音效比按键音长得多（按键 90ms / 这里最长 520ms），
     // 且必须"一听就分得出来"——不能只是按键音换个音高（用户 2026-09-14 反馈）。
-    private val fxSamples = sampleRate * 320 / 1000
+    private val fxSamples = sampleRate * 520 / 1000
     private var fxTrack: AudioTrack? = null
     private var fxBuilt = -1
 
@@ -684,24 +684,36 @@ internal class HitSounds {
     }
 
     /**
-     * 炸弹爆炸：起爆炸裂（极短高频噪声）+ 爆破主体噪声 + 低频冲击下滑（130→42Hz）
-     * + 中频"炸"体（手机小喇叭推不动纯低频，必须有中频成分）+ 余震。
-     * 末端 40ms 淡出，避免爆尾"啪"声。
+     * 炸弹爆炸：起爆瞬态 + 炸裂噪声 + 爆破主体 + 低频冲击下滑（150→38Hz）+ 中频"炸"体
+     * + 二次爆裂碎片 + 余震。手机小喇叭推不动纯低频，所以中频（260Hz）必须给足。
+     *
+     * ⚠️ 2026-09-14 返工：用户反馈"炸弹音效不够明显"。旧版只有 320ms、峰值被 tanh 压掉
+     * 大半、且 58Hz 余震在小喇叭上几乎没声——听感上被音乐盖住。现在加长到 520ms、
+     * 叠了 8ms 高频起爆瞬态（爆点更"脆"）、驱动量提到 1.35（tanh 饱和更狠=更响更密）、
+     * 末端 50ms 淡出防爆尾"啪"声。
      */
     private fun synthBomb(out: ShortArray) {
         val dur = out.size.toDouble() / sampleRate
         for (i in out.indices) {
             val t = i.toDouble() / sampleRate
             val p = (t / dur).coerceAtMost(1.0)
-            val crack = (Math.random() - 0.5) * Math.exp(-t * 55.0) * 1.1
-            val blast = (Math.random() - 0.5) * Math.exp(-t * 11.0) * 0.75
-            val boom = Math.sin(2 * Math.PI * 130.0 * (1.0 - 0.68 * p) * t) * Math.exp(-t * 8.0) * 0.8
-            val mid = Math.sin(2 * Math.PI * 320.0 * t) * Math.exp(-t * 30.0) * 0.4
-            val rumble = Math.sin(2 * Math.PI * 58.0 * t) * Math.exp(-t * 12.0) * 0.35
-            val tail = if (t > dur - 0.04) ((dur - t) / 0.04) else 1.0
+            // 起爆瞬态：8ms 高频方波，给爆炸一个"脆"的起头
+            val transient = if (t < 0.010) {
+                (if (Math.sin(2 * Math.PI * 1400.0 * t) >= 0) 1.0 else -1.0) * (1.0 - t / 0.010) * 1.5
+            } else 0.0
+            val crack = (Math.random() - 0.5) * Math.exp(-t * 48.0) * 1.6
+            val blast = (Math.random() - 0.5) * Math.exp(-t * 7.5) * 1.05
+            // 低频冲击：150Hz 快速下滑到 ~38Hz
+            val boom = Math.sin(2 * Math.PI * 150.0 * (1.0 - 0.75 * p) * t) * Math.exp(-t * 5.5)
+            val mid = Math.sin(2 * Math.PI * 260.0 * t) * Math.exp(-t * 22.0) * 0.55
+            // 二次爆裂：60ms 后的一波碎片噪声，让爆炸"有层次"
+            val debris = if (t > 0.06) (Math.random() - 0.5) * Math.exp(-(t - 0.06) * 26.0) * 0.55 else 0.0
+            val rumble = Math.sin(2 * Math.PI * 48.0 * t) * Math.exp(-t * 6.0) * 0.45
+            val tail = if (t > dur - 0.05) ((dur - t) / 0.05) else 1.0
             // tanh 软削波：起爆瞬间自然饱和（爆音本色），不做硬切
-            val v = Math.tanh((crack + blast + boom + mid + rumble) * 1.05) * tail
-            out[i] = (v * 0.95 * Short.MAX_VALUE).toInt()
+            val raw = transient + crack + blast + boom + mid + debris + rumble
+            val v = Math.tanh(raw * 1.35) * tail
+            out[i] = (v * Short.MAX_VALUE).toInt()
                 .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
         }
     }
@@ -722,7 +734,7 @@ internal class HitSounds {
             val sq = if (Math.sin(2 * Math.PI * f * t) >= 0) 1.0 else -1.0
             val bell = Math.sin(2 * Math.PI * f * 3.0 * t) * 0.22 +
                     Math.sin(2 * Math.PI * f * 4.2 * t) * 0.10
-            val tail = if (t > dur - 0.04) ((dur - t) / 0.04) else 1.0
+            val tail = if (t > dur - 0.05) ((dur - t) / 0.05) else 1.0
             val v = (sq * 0.62 + bell) * env * tail
             out[i] = (v * 0.9 * Short.MAX_VALUE).toInt()
                 .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
@@ -1546,9 +1558,9 @@ private fun WhackMoleGameScreen(
                                         when {
                                             // 空点：轻"噗"声，无惩罚
                                             r == null -> sounds.play(165f, 0.12f, sndStyle)
-                                            // 炸弹：专属爆炸音效 + 重震动 + 整屏抖动
+                                            // 炸弹：专属爆炸音效（音量拉满，要压得住背景音乐）+ 重震动 + 整屏抖动
                                             r.second == ChartAnalyzer.TYPE_BOMB -> {
-                                                sounds.playFx(13)
+                                                sounds.playFx(13, 1f)
                                                 if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 shakeUntil = SystemClock.elapsedRealtime() + 220
                                             }
