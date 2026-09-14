@@ -17,8 +17,8 @@ android {
         applicationId = "com.dengdeng.music"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.3.1"
+        versionCode = 15
+        versionName = "1.3.3"
 
         // 腾讯云 COS 密钥（联网排行榜）：构建时注入，不进仓库（GitHub Push Protection 要求）。
         // 本机：local.properties 或 secrets.properties（两者都被 .gitignore 排除；后者不

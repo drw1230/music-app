@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
@@ -45,6 +46,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.sin
 
 /**
  * 别踩白块（听歌模式）—— Batch 1
@@ -304,23 +306,44 @@ internal class TileEngine(
 
 /** 一套与 App 主题色相近、且保证对比度的游戏配色 */
 internal class TilePalette(
-    val block: Color,        // 方块主色（跟随主题色相）
-    val blockTop: Color,     // 方块顶部像素高光
-    val blockBottom: Color,  // 方块底部像素暗边
-    val laneBg: Color,       // 轨道底
-    val laneAlt: Color,      // 相邻轨道交替色
-    val laneLine: Color,     // 轨道分隔线
-    val hitLine: Color,      // 判定线
+    val bgTop: Color,        // 渐变底：上端（主题色淡调）
+    val bgBottom: Color,     // 渐变底：下端（比上端略深，白线才看得出来）
+    val star: Color,         // 背景小星星（主题色深调，低透明度使用）
+    val block: Color,        // 方块主色（经典纯黑）
+    val blockTop: Color,     // 兼容字段（经典版与 block 同色）
+    val blockBottom: Color,  // 兼容字段（经典版与 block 同色）
+    val laneLine: Color,     // 轨道分隔线（白色）
+    val hitLine: Color,      // 主题色（UI 强调用，不画在场地里）
     val flash: Color,        // 命中闪光
     val good: Color,         // 完美/精彩/良好文字色
     val bad: Color           // 失误色
 )
 
 /**
+ * 背景小星星表（确定性生成一次，运行时只按时间算位置/亮度 → 不会每帧乱跳）。
+ * 每颗 6 个数：x(0..1) y(0..1) 边长px 相位 速度 基础亮度
+ */
+private val TILE_STARS: FloatArray = run {
+    val rnd = java.util.Random(20260914L)
+    val n = 34
+    FloatArray(n * 6) { i ->
+        when (i % 6) {
+            0 -> rnd.nextFloat()                     // x
+            1 -> rnd.nextFloat()                     // y
+            2 -> 2f + rnd.nextInt(3)                 // 边长 2~4px（像素风）
+            3 -> rnd.nextFloat() * 6.2832f           // 相位
+            4 -> 0.18f + rnd.nextFloat() * 0.50f     // 闪烁 + 上浮速度
+            else -> 0.12f + rnd.nextFloat() * 0.30f  // 基础亮度（浅底上要很淡）
+        }
+    }
+}
+
+/**
  * 经典《别踩白块儿》配色（用户 2026-09-14 定稿版）：
- * - 底色 = 主题色的极浅调（亮色主题）/ 极深调（暗色主题），只保证"跟主题色相近"
- * - 方块 = 纯黑（亮底）/ 近白（暗底）—— 经典钢琴块就是黑白两色，不掺主题色，避免花哨
- * - 四条轨道同色，只靠 1px 细分隔线切分（经典版就是这样，没有交替底色）
+ * - 底色 = 主题色相生成的**浅色渐变**（上淡下略深）——必须偏浅，否则会压过黑块的视觉
+ * - 轨道分隔线 = **白色**（靠渐变上下的色差显出来，浅底上本来就是若隐若现的分割感）
+ * - 背景叠一层**动态小星星**（缓慢上浮 + 呼吸式明暗），用主题色深调 + 低透明度
+ * - 方块 = 纯黑（亮底）/ 近白（暗底）—— 经典钢琴块就是黑白两色，不掺主题色
  */
 internal fun buildTilePalette(primary: Color, background: Color): TilePalette {
     val hsv = FloatArray(3)
@@ -334,19 +357,21 @@ internal fun buildTilePalette(primary: Color, background: Color): TilePalette {
 
     val hue = hsv[0]
     val sat = hsv[1].let { if (it < 0.12f) 0.35f else it }
+    // 亮底：整体明度都压在 0.86 以上（浅），但上下留 0.11 落差 → 白线才有戏
+    // 暗底：同样思路反过来（0.085~0.195），白线靠"比底亮"显示
+    val vTop = if (bgLight) 0.972f else 0.085f
+    val vBot = if (bgLight) 0.862f else 0.195f
 
     val block = if (bgLight) Color(0xFF0A0A0A) else Color(0xFFF7F7F7)
-    val laneBg = hsl(hue, sat * 0.26f, if (bgLight) 0.968f else 0.105f)
-    val laneAlt = laneBg                       // 经典：四条轨道同色
-    val laneLine = hsl(hue, sat * 0.20f, if (bgLight) 0.84f else 0.26f)
 
     return TilePalette(
+        bgTop = hsl(hue, sat * 0.24f, vTop),
+        bgBottom = hsl(hue, sat * 0.48f, vBot),
+        star = hsl(hue, sat * 0.85f, if (bgLight) 0.66f else 0.92f),
         block = block,
         blockTop = block,
         blockBottom = block,
-        laneBg = laneBg,
-        laneAlt = laneAlt,
-        laneLine = laneLine,
+        laneLine = Color.White,
         hitLine = primary,
         flash = block,
         good = hsl(hue, sat, if (bgLight) 0.42f else 0.86f),
@@ -664,10 +689,13 @@ private fun TilePlayScreen(
     var gameKey by remember { mutableStateOf(0) }
     val engine = remember(gameKey) { TileEngine(chart, 0L, chart.durationMs, mode) }
     val palette = rememberTilePalette()
+    // 三档难度整体上调（用户 2026-09-14 反馈整体太简单）。
+    // speedMs = 方块从屏幕顶落到判定线的总时长，越小越快、反应时间越短。
+    // 旧值 慢1500 / 中1050 / 快750 → 新值 慢1200 / 中800 / 快560（快约 20~25%）
     val speedMs = when (speed) {
-        0 -> 1500L
-        2 -> 750L
-        else -> 1050L
+        0 -> 1200L
+        2 -> 560L
+        else -> 800L
     }
 
     val player = remember {
@@ -786,7 +814,7 @@ private fun TilePlayScreen(
                 .statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 6.dp)
                 .background(
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
                     RoundedCornerShape(12.dp)
                 )
                 .padding(horizontal = 12.dp, vertical = 2.dp),
@@ -1019,15 +1047,34 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
         .coerceIn(60, (h * 0.30f).toInt().coerceAtLeast(60))
     val pxPerMs = hitY.toFloat() / speedMs.toFloat()
 
-    // 整片底色（主题色极浅调）
-    drawRect(p.laneBg)
+    // ① 浅色渐变底（主题色相，上淡下略深；必须浅，不能压过黑块）
+    drawRect(brush = Brush.verticalGradient(listOf(p.bgTop, p.bgBottom), startY = 0f, endY = h))
 
-    // 三条 1px 分隔线，切出 4 条轨道（经典版没有交替底色）
+    // ② 背景小星星：缓慢上浮 + 呼吸式明暗（像素方块，压在轨道线之下）
+    val tSec = now / 1000f
+    for (s in 0 until TILE_STARS.size / 6) {
+        val bx = TILE_STARS[s * 6]
+        val by = TILE_STARS[s * 6 + 1]
+        val sz = TILE_STARS[s * 6 + 2]
+        val ph = TILE_STARS[s * 6 + 3]
+        val sp = TILE_STARS[s * 6 + 4]
+        val base = TILE_STARS[s * 6 + 5]
+        val yNorm = ((by - tSec * 0.010f * sp) % 1f + 1f) % 1f
+        val a = (base * (0.30f + 0.70f * abs(sin(tSec * sp + ph)))).coerceIn(0f, 0.45f)
+        if (a <= 0.012f) continue
+        drawRect(
+            p.star.copy(alpha = a),
+            topLeft = Offset((bx * w).toInt().toFloat(), (yNorm * h).toInt().toFloat()),
+            size = Size(sz, sz)
+        )
+    }
+
+    // ③ 白色轨道分隔线（2px，切出 4 条轨道）
     for (i in 1..3) {
         drawRect(
-            p.laneLine,
-            topLeft = Offset((i * laneWi).toFloat(), 0f),
-            size = Size(1f, h)
+            p.laneLine.copy(alpha = 0.92f),
+            topLeft = Offset((i * laneWi - 1).toFloat(), 0f),
+            size = Size(2f, h)
         )
     }
 

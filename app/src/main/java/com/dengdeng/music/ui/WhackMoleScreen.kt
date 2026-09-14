@@ -1489,7 +1489,7 @@ private fun WhackMoleGameScreen(
                     Modifier
                         .fillMaxWidth()
                         .background(
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
                             RoundedCornerShape(12.dp)
                         )
                         .padding(horizontal = 12.dp, vertical = 2.dp),

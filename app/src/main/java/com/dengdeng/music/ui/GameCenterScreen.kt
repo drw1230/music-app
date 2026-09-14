@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
@@ -38,7 +39,8 @@ import com.dengdeng.music.data.PlayerProfile
 fun GameCenterScreen(
     onBack: () -> Unit,
     onWhackMole: () -> Unit,
-    onTileGame: () -> Unit
+    onTileGame: () -> Unit,
+    onMyInfo: () -> Unit
 ) {
     val ctx = LocalContext.current
     var name by remember { mutableStateOf("") }
@@ -66,11 +68,13 @@ fun GameCenterScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
-            // ── 玩家卡片 ──
+            // ── 玩家卡片（可点 → 我的信息：玩家档案 + 本地战绩 + 联网排行榜） ──
             Card(
                 shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onMyInfo() }
             ) {
                 Row(
                     modifier = Modifier.padding(16.dp),
@@ -83,18 +87,23 @@ fun GameCenterScreen(
                         modifier = Modifier.size(44.dp)
                     )
                     Spacer(Modifier.width(12.dp))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(
                             "玩家：${name.ifBlank { "未设置" }}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "游戏成绩与排行榜都绑定这个名字 · 改名请到「我的信息」",
+                            "查看我的信息与详细战绩 · 改名也在那里",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    Icon(
+                        Icons.Default.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 

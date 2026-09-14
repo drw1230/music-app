@@ -361,6 +361,15 @@ fun MainScreen(
                     )
                 }
             }
+            // 我的信息页（玩家档案 + 联网排行榜）
+            // 【顺序重要】放在游戏中心之前：从游戏中心顶部「玩家」卡进来时两者同时为 true，
+            // 让「我的信息」压在上面；它 onBack 只关自己 → 自然退回游戏中心
+            showMyInfo -> {
+                BackHandler { showMyInfo = false }
+                Box(Modifier.padding(padding)) {
+                    MyInfoScreen(onBack = { showMyInfo = false })
+                }
+            }
             // 游戏中心页（已取名点「小游戏」直接进入；与我的信息一样隐藏迷你播放条）
             showGameCenter -> {
                 BackHandler { showGameCenter = false }
@@ -368,15 +377,9 @@ fun MainScreen(
                     GameCenterScreen(
                         onBack = { showGameCenter = false },
                         onWhackMole = { showWhackMole = true },
-                        onTileGame = { showTileGame = true }
+                        onTileGame = { showTileGame = true },
+                        onMyInfo = { showMyInfo = true }
                     )
-                }
-            }
-            // 我的信息页（玩家档案 + 联网排行榜）
-            showMyInfo -> {
-                BackHandler { showMyInfo = false }
-                Box(Modifier.padding(padding)) {
-                    MyInfoScreen(onBack = { showMyInfo = false })
                 }
             }
             // 软件升级界面（蓝奏云网页，覆盖整个曲库区；返回键由界面内处理，支持回网页上一页）
