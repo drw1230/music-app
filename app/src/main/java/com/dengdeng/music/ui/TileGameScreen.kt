@@ -317,10 +317,10 @@ internal class TilePalette(
 )
 
 /**
- * 取色规则（用户 2026-09-14 要求：与主题色相近，太浅就加深）：
- * - 亮背景：方块 = 主题色相压深（明度 ~0.20），即"深色块带一点主题味"
- * - 暗背景：方块 = 主题色相提亮（明度 ~0.88），否则深块在暗底上看不见
- * - 轨道底 / 分隔线 / 判定线 同源派生，保证整套颜色一致
+ * 经典《别踩白块儿》配色（用户 2026-09-14 定稿版）：
+ * - 底色 = 主题色的极浅调（亮色主题）/ 极深调（暗色主题），只保证"跟主题色相近"
+ * - 方块 = 纯黑（亮底）/ 近白（暗底）—— 经典钢琴块就是黑白两色，不掺主题色，避免花哨
+ * - 四条轨道同色，只靠 1px 细分隔线切分（经典版就是这样，没有交替底色）
  */
 internal fun buildTilePalette(primary: Color, background: Color): TilePalette {
     val hsv = FloatArray(3)
@@ -333,26 +333,23 @@ internal fun buildTilePalette(primary: Color, background: Color): TilePalette {
     }
 
     val hue = hsv[0]
-    val sat = hsv[1].let { if (it < 0.12f) 0.30f else it }   // 主题色是灰调时给一点饱和度，避免块变纯灰
+    val sat = hsv[1].let { if (it < 0.12f) 0.35f else it }
 
-    val blockV = if (bgLight) 0.20f else 0.88f
-    val block = hsl(hue, sat * 0.92f, blockV)
-    val blockTop = hsl(hue, sat * 0.72f, (blockV + if (bgLight) 0.10f else 0.08f))
-    val blockBottom = hsl(hue, sat, (blockV - if (bgLight) 0.08f else 0.14f))
-    val laneBg = hsl(hue, if (bgLight) 0.10f else 0.32f, if (bgLight) 0.965f else 0.115f)
-    val laneAlt = hsl(hue, if (bgLight) 0.14f else 0.36f, if (bgLight) 0.935f else 0.145f)
-    val laneLine = hsl(hue, if (bgLight) 0.30f else 0.45f, if (bgLight) 0.80f else 0.32f)
+    val block = if (bgLight) Color(0xFF0A0A0A) else Color(0xFFF7F7F7)
+    val laneBg = hsl(hue, sat * 0.26f, if (bgLight) 0.968f else 0.105f)
+    val laneAlt = laneBg                       // 经典：四条轨道同色
+    val laneLine = hsl(hue, sat * 0.20f, if (bgLight) 0.84f else 0.26f)
 
     return TilePalette(
         block = block,
-        blockTop = blockTop,
-        blockBottom = blockBottom,
+        blockTop = block,
+        blockBottom = block,
         laneBg = laneBg,
         laneAlt = laneAlt,
         laneLine = laneLine,
         hitLine = primary,
-        flash = hsl(hue, sat * 0.35f, 0.99f),
-        good = hsl(hue, sat, if (bgLight) 0.45f else 0.85f),
+        flash = block,
+        good = hsl(hue, sat, if (bgLight) 0.42f else 0.86f),
         bad = Color(0xFFE24B4A)
     )
 }
@@ -452,12 +449,15 @@ fun TileGameScreen(
                         latencyMs = it
                         scope.launch { WhackMoleStore.setLatencyMs(ctx, it) }
                     },
-                    onResult = { usedMs, score, streak ->
+                    onResult = { usedMs, score, streak, completed ->
                         scope.launch {
                             when (mode) {
                                 TileMode.CLASSIC -> {
-                                    val (b, _) = TileStore.submitClassic(ctx, usedMs)
-                                    bestClassic = b
+                                    // 未打满 50 块不记成绩（避免把纪录冲成 0）
+                                    if (completed && usedMs > 0) {
+                                        val (b, _) = TileStore.submitClassic(ctx, usedMs)
+                                        bestClassic = b
+                                    }
                                 }
                                 TileMode.ARCADE -> {
                                     val (b, _) = TileStore.submitArcade(ctx, score)
@@ -526,7 +526,7 @@ private fun TileHomeScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Text(
-                "4 条轨道 · 白块别碰 · 方块跟着歌曲节拍下落，落到判定线时点掉",
+                "4 条轨道 · 白块别碰 · 黑色方块跟着歌曲节拍下落，块底落到底就点掉",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -654,7 +654,7 @@ private fun TilePlayScreen(
     speed: Int,
     latencyMs: Long,
     onLatency: (Long) -> Unit,
-    onResult: (usedMs: Long, score: Long, streak: Int) -> Unit,
+    onResult: (usedMs: Long, score: Long, streak: Int, completed: Boolean) -> Unit,
     onQuit: () -> Unit,
     onPickAnother: () -> Unit
 ) {
@@ -695,7 +695,14 @@ private fun TilePlayScreen(
         reported = true
         player.pause()
         phase = TilePhase.RESULT
-        onResult(engine.usedMs, engine.score, engine.relayMaxStreak)
+        // 经典：只有打满 50 块才算有效成绩——中途失误用尽时 usedMs 是残局数据，
+        // 直接提交会把「最佳用时」冲成 0（2026-09-14 真机验证踩到的坑）
+        val completed = if (mode == TileMode.CLASSIC) {
+            engine.hitTiles >= TileEngine.CLASSIC_TILES
+        } else {
+            !engine.failed
+        }
+        onResult(engine.usedMs, engine.score, engine.relayMaxStreak, completed)
         scope.launch { TileStore.addTiles(ctx, engine.hitTiles) }
     }
 
@@ -747,136 +754,133 @@ private fun TilePlayScreen(
         showMenu = true
     }
 
-    Scaffold { padding ->
-        Column(
+    Box(Modifier.fillMaxSize()) {
+        // ── 全屏下落区：铺满整屏（含状态栏 / 导航栏区域），无留边 ──
+        Canvas(
             Modifier
-                .padding(padding)
                 .fillMaxSize()
-        ) {
-            // ── 顶部信息条 ──
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("${engine.score}", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                    val sub = when (mode) {
-                        TileMode.CLASSIC -> "经典 · ${engine.classicProgress}/${TileEngine.CLASSIC_TILES}"
-                        TileMode.ARCADE -> "街机 · ${engine.hitTiles} 块"
-                        TileMode.RELAY -> "接力 · 第 ${engine.relayStreak + 1} 段 · 已接 ${engine.relayMaxStreak}"
-                    }
-                    Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (engine.combo >= 2) {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            "${engine.combo} 连",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = palette.hitLine
-                        )
-                        Text(
-                            "x${comboMulText(engine.combo)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Spacer(Modifier.width(12.dp))
-                }
-                // 失误额度（3 颗像素方块，暗掉 = 已用）
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    repeat(TileEngine.MAX_MISS) { i ->
-                        Box(
-                            Modifier
-                                .padding(end = 4.dp)
-                                .size(12.dp)
-                                .background(
-                                    if (i < engine.missLeft) palette.bad else palette.bad.copy(alpha = 0.18f),
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                    }
-                }
-                Spacer(Modifier.width(6.dp))
-                IconButton(onClick = {
-                    if (phase == TilePhase.PLAY && !paused) {
-                        paused = true
-                        player.pause()
-                    }
-                    showMenu = true
-                }) {
-                    Icon(Icons.Default.Pause, contentDescription = "暂停")
-                }
-            }
-
-            // ── 下落区 ──
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                Canvas(
-                    Modifier
-                        .fillMaxSize()
-                        .pointerInput(gameKey) {
-                            detectTapGestures { offset ->
-                                if (phase != TilePhase.PLAY || paused) return@detectTapGestures
-                                val laneW = size.width / 4f
-                                val lane = (offset.x / laneW).toInt().coerceIn(0, 3)
-                                val res = engine.tap(lane, engine.now)
-                                val (st, _, isMiss) = res
-                                when {
-                                    isMiss -> sounds.play(MISS_FREQ, 0.5f, 0)
-                                    st == NoteState.PERFECT -> sounds.play(laneFreq(lane), 0.45f, 0)
-                                    st == NoteState.GREAT -> sounds.play(laneFreq(lane) * 0.9f, 0.4f, 0)
-                                    else -> sounds.play(laneFreq(lane) * 0.8f, 0.35f, 0)
-                                }
-                            }
+                .pointerInput(gameKey) {
+                    detectTapGestures { offset ->
+                        if (phase != TilePhase.PLAY || paused) return@detectTapGestures
+                        val laneW = size.width / 4f
+                        val lane = (offset.x / laneW).toInt().coerceIn(0, 3)
+                        val res = engine.tap(lane, engine.now)
+                        val (st, _, isMiss) = res
+                        when {
+                            isMiss -> sounds.play(MISS_FREQ, 0.5f, 0)
+                            st == NoteState.PERFECT -> sounds.play(laneFreq(lane), 0.45f, 0)
+                            st == NoteState.GREAT -> sounds.play(laneFreq(lane) * 0.9f, 0.4f, 0)
+                            else -> sounds.play(laneFreq(lane) * 0.8f, 0.35f, 0)
                         }
-                ) {
-                    drawTileField(engine, palette, frameNow, speedMs)
+                    }
                 }
+        ) {
+            drawTileField(engine, palette, frameNow, speedMs)
+        }
 
-                // 提示条（接上 / 失误）
-                val sinceBanner = SystemClock.elapsedRealtime() - engine.bannerAt
-                if (engine.banner.isNotBlank() && sinceBanner < 900) {
-                    val alpha = 1f - sinceBanner / 900f
+        // ── 顶部信息条（浮层：黑块会从文字下穿过，所以垫一层半透明底衬保证可读） ──
+        Row(
+            Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .background(
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
+                    RoundedCornerShape(12.dp)
+                )
+                .padding(horizontal = 12.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("${engine.score}", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                val sub = when (mode) {
+                    TileMode.CLASSIC -> "经典 · ${engine.classicProgress}/${TileEngine.CLASSIC_TILES}"
+                    TileMode.ARCADE -> "街机 · ${engine.hitTiles} 块"
+                    TileMode.RELAY -> "接力 · 第 ${engine.relayStreak + 1} 段 · 已接 ${engine.relayMaxStreak}"
+                }
+                Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (engine.combo >= 2) {
+                Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        engine.banner,
+                        "${engine.combo} 连",
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (engine.banner.startsWith("接上")) palette.hitLine else palette.bad,
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 18.dp)
-                            .background(
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.7f * alpha),
-                                RoundedCornerShape(8.dp)
-                            )
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                        color = palette.hitLine
+                    )
+                    Text(
+                        "x${comboMulText(engine.combo)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-
-                if (phase == TilePhase.COUNTDOWN) {
-                    Column(
+                Spacer(Modifier.width(12.dp))
+            }
+            // 失误额度（3 颗方块，暗掉 = 已用）
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                repeat(TileEngine.MAX_MISS) { i ->
+                    Box(
                         Modifier
-                            .align(Alignment.Center)
+                            .padding(end = 4.dp)
+                            .size(12.dp)
                             .background(
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                                RoundedCornerShape(16.dp)
+                                if (i < engine.missLeft) palette.bad else palette.bad.copy(alpha = 0.18f),
+                                RoundedCornerShape(2.dp)
                             )
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            if (countdown > 0) "$countdown" else "开始!",
-                            fontSize = 52.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text("黑块到线就点 · 白块别碰", style = MaterialTheme.typography.bodySmall)
-                    }
+                    )
                 }
+            }
+            Spacer(Modifier.width(6.dp))
+            IconButton(onClick = {
+                if (phase == TilePhase.PLAY && !paused) {
+                    paused = true
+                    player.pause()
+                }
+                showMenu = true
+            }) {
+                Icon(Icons.Default.Pause, contentDescription = "暂停")
+            }
+        }
+
+        // ── 提示条（接上 / 失误） ──
+        val sinceBanner = SystemClock.elapsedRealtime() - engine.bannerAt
+        if (engine.banner.isNotBlank() && sinceBanner < 900) {
+            val alpha = 1f - sinceBanner / 900f
+            Text(
+                engine.banner,
+                fontWeight = FontWeight.Bold,
+                color = if (engine.banner.startsWith("接上")) palette.hitLine else palette.bad,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 74.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.7f * alpha),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+        }
+
+        // ── 倒计时 ──
+        if (phase == TilePhase.COUNTDOWN) {
+            Column(
+                Modifier
+                    .align(Alignment.Center)
+                    .background(
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                        RoundedCornerShape(16.dp)
+                    )
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    if (countdown > 0) "$countdown" else "开始!",
+                    fontSize = 52.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text("黑块到底就点 · 白块别碰", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -994,8 +998,9 @@ private fun rememberTilePalette(): TilePalette {
 // ════════════════════════════ 下落渲染（像素风） ════════════════════════════
 
 /**
- * 像素风下落场：轨道底 + 分隔线 + 判定线 + 方块（顶部高光/底部暗边/像素缺口）
- * 所有矩形坐标取整 → 无抗锯齿模糊，和打地鼠的像素观感一致
+ * 经典《别踩白块儿》画面：4 条同色轨道 + 1px 细分隔线 + 纯色方块。
+ * 没有判定线、没有高光/暗边/缺口——经典版就是「块触底就点」，底部即终点。
+ * 所有坐标取整，保持硬边；命中即消失（经典反馈），漏块短暂泛红再消失。
  */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
     engine: TileEngine,
@@ -1006,39 +1011,25 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
     val w = size.width
     val h = size.height
     val laneWi = (w / 4f).toInt().coerceAtLeast(1)
-    val hitY = (h * 0.82f).toInt()
-    val noteH = (laneWi * 0.42f).toInt().coerceIn(26, 92)
+    // 判定位置贴近屏幕底部：块底边碰到下方就点（经典手感）
+    val hitY = (h * 0.93f).toInt()
+    // 方块是「竖向为长边」的黄金比例长方形：宽 = 轨道宽，高 = 宽 × 1.618
+    // （0.46 倍太薄 → 正方形太方 → 用户 2026-09-14 定：竖向长边黄金比例）
+    val noteH = (laneWi * 1.618f).toInt()
+        .coerceIn(60, (h * 0.30f).toInt().coerceAtLeast(60))
     val pxPerMs = hitY.toFloat() / speedMs.toFloat()
 
-    // 轨道底（交替色）
-    for (i in 0..3) {
-        drawRect(
-            if (i % 2 == 0) p.laneBg else p.laneAlt,
-            topLeft = Offset((i * laneWi).toFloat(), 0f),
-            size = Size(laneWi.toFloat(), h)
-        )
-    }
-    // 分隔线（2px 像素线）
+    // 整片底色（主题色极浅调）
+    drawRect(p.laneBg)
+
+    // 三条 1px 分隔线，切出 4 条轨道（经典版没有交替底色）
     for (i in 1..3) {
         drawRect(
-            p.laneLine.copy(alpha = 0.55f),
-            topLeft = Offset((i * laneWi - 1).toFloat(), 0f),
-            size = Size(2f, h)
+            p.laneLine,
+            topLeft = Offset((i * laneWi).toFloat(), 0f),
+            size = Size(1f, h)
         )
     }
-
-    // 判定线：3px 实线 + 上下各 1px 暗边，像素味
-    drawRect(
-        p.hitLine.copy(alpha = 0.22f),
-        topLeft = Offset(0f, (hitY - 5).toFloat()),
-        size = Size(w, 2f)
-    )
-    drawRect(p.hitLine, topLeft = Offset(0f, (hitY - 2).toFloat()), size = Size(w, 3f))
-    drawRect(
-        p.hitLine.copy(alpha = 0.35f),
-        topLeft = Offset(0f, (hitY + 1).toFloat()),
-        size = Size(w, 1f)
-    )
 
     val nowRt = SystemClock.elapsedRealtime()
 
@@ -1046,60 +1037,32 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
         val n = engine.notes[i]
         val dt = n.timeMs - now
         val y = hitY - (dt * pxPerMs).toInt()
-        // 出屏裁剪（上方留一个块高、下方多留一点给判定后的闪光）
+        // 上方留一个块高、下方多留一点（判定后块还会继续滑出去一点）
         if (y - noteH > h || y < -noteH) continue
 
         val st = engine.stateOf(i)
         val jAt = engine.judgedAtOf(i)
-        val fading = st != NoteState.PENDING && jAt > 0 && nowRt - jAt < 200
-        val alpha = if (fading) 1f - (nowRt - jAt) / 200f else 1f
-        val laneX = n.lane * laneWi + 3
-        val boxW = (laneWi - 6).coerceAtLeast(8)
+        val laneX = n.lane * laneWi + 1
+        val boxW = (laneWi - 2).coerceAtLeast(8)
+        val top = (y - noteH).toFloat()
 
-        when (st) {
-            NoteState.PENDING -> {
+        if (st == NoteState.PENDING) {
+            drawRect(
+                p.block,
+                topLeft = Offset(laneX.toFloat(), top),
+                size = Size(boxW.toFloat(), noteH.toFloat())
+            )
+        } else if (st == NoteState.MISS) {
+            // 漏块：短暂泛红后消失（不给残影，保持画面干净）
+            val age = if (jAt > 0) nowRt - jAt else 999L
+            if (age < 190) {
                 drawRect(
-                    p.block,
-                    topLeft = Offset(laneX.toFloat(), (y - noteH).toFloat()),
-                    size = Size(boxW.toFloat(), noteH.toFloat())
-                )
-                // 顶部像素高光 + 底部像素暗边
-                drawRect(
-                    p.blockTop,
-                    topLeft = Offset(laneX.toFloat(), (y - noteH).toFloat()),
-                    size = Size(boxW.toFloat(), 3f)
-                )
-                drawRect(
-                    p.blockBottom,
-                    topLeft = Offset(laneX.toFloat(), (y - 3).toFloat()),
-                    size = Size(boxW.toFloat(), 3f)
-                )
-                // 像素缺口（左侧小凹口，纯装饰）
-                drawRect(
-                    p.blockBottom,
-                    topLeft = Offset((laneX + 4).toFloat(), (y - noteH + 7).toFloat()),
-                    size = Size(4f, 4f)
-                )
-            }
-            NoteState.EMPTY_TAP -> {}
-            else -> if (fading) {
-                val c = if (st == NoteState.MISS || st == NoteState.EMPTY_TAP) p.bad else p.flash
-                drawRect(
-                    c.copy(alpha = alpha * 0.85f),
-                    topLeft = Offset(laneX.toFloat(), (y - noteH).toFloat()),
+                    p.bad.copy(alpha = 1f - age / 190f),
+                    topLeft = Offset(laneX.toFloat(), top),
                     size = Size(boxW.toFloat(), noteH.toFloat())
                 )
             }
         }
-    }
-
-    // 判定线附近的"脉冲"（最近一次点击位置由 engine.banner 间接体现，这里只画静态刻度）
-    for (i in 0..3) {
-        val cx = i * laneWi + laneWi / 2
-        drawRect(
-            p.hitLine.copy(alpha = 0.5f),
-            topLeft = Offset((cx - 2).toFloat(), (hitY + 5).toFloat()),
-            size = Size(4f, 8f)
-        )
+        // 命中：经典做法 = 瞬间消失，不画任何东西
     }
 }

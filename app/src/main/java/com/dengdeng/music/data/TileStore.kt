@@ -43,6 +43,9 @@ object TileStore {
 
     /** 经典结算：用时更短即刷新纪录。@return (最佳用时, 是否新纪录) */
     suspend fun submitClassic(ctx: Context, usedMs: Long): Pair<Long, Boolean> {
+        // 防御：无效用时（<=0，例如残局/未打满就失败）一律不写盘，
+        // 否则会把历史最佳冲成 0（2026-09-14 真机验证踩到的坑）
+        if (usedMs <= 0L) return classicBestMs(ctx) to false
         var best = usedMs
         var isNew = true
         ctx.playerDataStore.edit { p ->
@@ -58,6 +61,7 @@ object TileStore {
 
     /** 街机结算：分数更高即刷新纪录。@return (最高分, 是否新纪录) */
     suspend fun submitArcade(ctx: Context, score: Long): Pair<Long, Boolean> {
+        if (score <= 0L) return arcadeBest(ctx) to false
         var best = score
         var isNew = true
         ctx.playerDataStore.edit { p ->
@@ -73,6 +77,7 @@ object TileStore {
 
     /** 接力结算：连续段数更高即刷新纪录。@return (最长段数, 是否新纪录) */
     suspend fun submitRelay(ctx: Context, streak: Int): Pair<Int, Boolean> {
+        if (streak <= 0) return relayBestStreak(ctx) to false
         var best = streak
         var isNew = true
         ctx.playerDataStore.edit { p ->

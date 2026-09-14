@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.layout
@@ -334,6 +335,56 @@ private fun pickBgByTime(): Int {
         h < 22.5f -> MoleArt.BG_NIGHT     // 夜晚
         else -> MoleArt.BG_MINIMAL        // 深夜
     }
+}
+
+/**
+ * 全屏铺底：把 108×192 的场景图「边缘延展」铺满整屏，而不是拉伸缩放。
+ *
+ * 为什么不用 cover 缩放：场景图里**草地和九宫格洞口本身就是背景的一部分**（土丘画在图上），
+ * 一旦按 cover 放大，草地线就会和九宫格盖上去的洞口错位（地鼠浮在天上）。
+ * 所以做法是：场景图仍按整数倍 k 画在它该在的位置（sw×sh @ sx,sy），
+ * 场景之外的四块区域分别用「最近的一条边框像素」拉出去补——
+ * 上方补顶行（夜空/天空，接缝同色看不出）、下方补底行（草地）、左右补最边上一列。
+ * 结果：整屏无黑边、无变形、九宫格与草地严丝合缝。
+ */
+private fun DrawScope.drawFullBleedBg(
+    kind: Int,
+    nowMs: Long,
+    sx: Float, sy: Float, sw: Float, sh: Float,
+    k: Int
+) {
+    val img = MoleSprites.scenes[kind]
+    val src = IntSize(MoleArt.SCENE_W, MoleArt.SCENE_H)
+    val W = size.width
+    val H = size.height
+    val sxI = sx.roundToInt()
+    val syI = sy.roundToInt()
+    val swI = sw.roundToInt()
+    val shI = sh.roundToInt()
+
+    fun patch(sx0: Int, sy0: Int, sw0: Int, sh0: Int, dx: Int, dy: Int, dw: Int, dh: Int) {
+        if (dw <= 0 || dh <= 0) return
+        drawImage(
+            img, IntOffset(sx0, sy0), IntSize(sw0, sh0),
+            IntOffset(dx, dy), IntSize(dw, dh), filterQuality = FilterQuality.None
+        )
+    }
+
+    // 上：把场景第一行拉满整个顶部横带（含左右上角）
+    val topH = syI
+    patch(0, 0, MoleArt.SCENE_W, 1, 0, 0, W.roundToInt(), topH)
+    // 下：把场景最后一行拉满整个底部横带（含左右下角）
+    val botY = syI + shI
+    patch(0, MoleArt.SCENE_H - 1, MoleArt.SCENE_W, 1, 0, botY, W.roundToInt(), H.roundToInt() - botY)
+    // 左：最左一列
+    patch(0, 0, 1, MoleArt.SCENE_H, 0, syI, sxI, shI)
+    // 右：最右一列
+    patch(MoleArt.SCENE_W - 1, 0, 1, MoleArt.SCENE_H, sxI + swI, syI, W.roundToInt() - sxI - swI, shI)
+    // 场景本体
+    patch(0, 0, MoleArt.SCENE_W, MoleArt.SCENE_H, sxI, syI, swI, shI)
+
+    // 动态层（云/星/萤火虫）与场景同一坐标系 → 平移到场景原点再按 k 画
+    translate(sxI.toFloat(), syI.toFloat()) { drawDynBg(kind, nowMs, k) }
 }
 
 /**
@@ -1344,163 +1395,165 @@ private fun WhackMoleGameScreen(
     val remainSec = ((endMs - frameNow).coerceAtLeast(0)) / 1000
     val progress = ((frameNow - startMs).toFloat() / (endMs - startMs).coerceAtLeast(1)).coerceIn(0f, 1f)
 
-    Scaffold { padding ->
-        Column(
-            Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .padding(horizontal = 12.dp)
-        ) {
-            // ── 顶部信息条 ──
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "分数 ${engine.score}",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (engine.combo >= 2) {
-                        Text(
-                            "连击 x${engine.combo}",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-                Text(
-                    "剩余 ${fmtDur(remainSec * 1000)}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(Modifier.width(6.dp))
-                // 暂停键：暂停并弹出暂停菜单（继续/退出/手感/延迟）
-                IconButton(onClick = {
-                    if (phase == GamePhase.PLAY && !paused) {
-                        paused = true
-                        player.pause()
-                    }
-                    showMenu = true
-                }) {
-                    Icon(Icons.Default.Pause, contentDescription = "暂停菜单")
-                }
-            }
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(4.dp)
-            )
+    Scaffold(containerColor = Color.Transparent) { padding ->
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val dens = LocalDensity.current
+            val scrW = with(dens) { maxWidth.toPx() }
+            val scrH = with(dens) { maxHeight.toPx() }
+            val safeB = with(dens) { padding.calculateBottomPadding().toPx() }
+            // 顶部信息条是浮层，但仍要给它留出高度，免得九宫格顶到它身上
+            val infoReserve = with(dens) { padding.calculateTopPadding().toPx() + 62.dp.toPx() }
+            val areaH = (scrH - infoReserve - safeB).coerceAtLeast(1f)
 
-            // ── 场景面板：背景 + 3×3 九宫格（含倒计时；炸弹误击时整屏抖动） ──
+            // 场景与九宫格共用一把尺：k = 1 个美术像素占几个设备像素，必须是整数倍
+            // （非整数倍时最近邻放大会让格子之间露缝、和背景土丘对不齐）
+            val k = minOf(scrW / MoleArt.SCENE_W, areaH / MoleArt.SCENE_H)
+                .toInt().coerceAtLeast(1)
+            val sw = (MoleArt.SCENE_W * k).toFloat()
+            val sh = (MoleArt.SCENE_H * k).toFloat()
+            val sx = (scrW - sw) / 2f                       // 水平居中
+            // 九宫格整体上提一点，下方多留一截草地（用户 2026-09-14 反馈格子太贴底）。
+            // 背景是「边缘延展」铺的，下方多出来的部分自动由草地那一行拉长补满。
+            val gridLift = (sh * 0.13f).roundToInt()
+            val sy = scrH - safeB - sh - gridLift
+            val gridTop = sy + (MoleArt.SCENE_H - MoleArt.GRID_H) * k
+
+            // ① 全屏像素背景：边缘延展铺满整屏（含状态栏 / 导航栏区域，无黑边无变形）
+            Canvas(Modifier.fillMaxSize()) {
+                drawFullBleedBg(bgKind, bgTime.longValue, sx, sy, sw, sh, k)
+            }
+
+            // ② 九宫格：几何上绑定到场景的草地区 → 与背景图里画好的 9 个土丘严丝合缝
             Box(
                 Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp)
+                    .offset { IntOffset(sx.roundToInt(), gridTop.roundToInt()) }
+                    .size(with(dens) { sw.toDp() }, with(dens) { (MoleArt.GRID_H * k).toDp() })
                     .graphicsLayer {
                         if (SystemClock.elapsedRealtime() < shakeUntil) {
                             translationX = (Math.random() - 0.5).toFloat() * 16f
                             translationY = (Math.random() - 0.5).toFloat() * 16f
                         }
-                    },
-                contentAlignment = Alignment.Center
+                    }
             ) {
-                BoxWithConstraints(contentAlignment = Alignment.Center) {
-                    // 整个场景必须按「整数倍像素」铺：k = 1 个美术像素占几个设备像素。
-                    // 整数倍是硬要求 —— 九宫格要和背景像素对齐，非整数倍会在格子之间露出缝。
-                    val dens = LocalDensity.current
-                    val availW = with(dens) { maxWidth.toPx() }
-                    val availH = with(dens) { maxHeight.toPx() }
-                    val k = minOf(availW / MoleArt.SCENE_W, availH / MoleArt.SCENE_H)
-                        .toInt().coerceAtLeast(1)
-                    Box(
-                        Modifier.layout { measurable, c ->
-                            // 再夹一次实际约束：万一某次测量给的是 0/极小约束，固定尺寸会越界
-                            val pw = minOf(MoleArt.SCENE_W * k, c.maxWidth).coerceAtLeast(1)
-                            val ph = minOf(MoleArt.SCENE_H * k, c.maxHeight).coerceAtLeast(1)
-                            val p = measurable.measure(Constraints.fixed(pw, ph))
-                            layout(p.width, p.height) { p.place(0, 0) }
-                        }
-                    ) {
-                        // 背景（按当前时段自动选，与美术预览的时段表一致）+ 动态层（云/星/萤火虫）
-                        Canvas(Modifier.fillMaxSize()) {
-                            drawImage(
-                                MoleSprites.scenes[bgKind],
-                                IntOffset.Zero, IntSize(MoleArt.SCENE_W, MoleArt.SCENE_H),
-                                IntOffset.Zero, IntSize(MoleArt.SCENE_W * k, MoleArt.SCENE_H * k),
-                                filterQuality = FilterQuality.None
-                            )
-                            drawDynBg(bgKind, bgTime.longValue, k)
-                        }
-                        // 九宫格：贴场景底部、零间距 → 每格正好 36k × 42k，与背景严丝合缝
-                        Column(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .fillMaxHeight(MoleArt.GRID_H.toFloat() / MoleArt.SCENE_H)
-                        ) {
-                            repeat(3) { row ->
-                                Row(Modifier.fillMaxWidth().weight(1f)) {
-                                    repeat(3) { col ->
-                                        val cell = row * 3 + col
-                                        MoleCellView(
-                                            mole = engine.moles[cell].value,
-                                            now = frameNow,
-                                            floating = engine.floatings.lastOrNull { it.cell == cell },
-                                            flashAge = SystemClock.elapsedRealtime() - engine.cellFlashMs[cell],
-                                            particles = engine.particles.filter { it.cell == cell },
-                                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                                            onTap = {
-                                                val r = engine.tap(cell)
-                                                when {
-                                                    // 空点：轻"噗"声，无惩罚
-                                                    r == null -> sounds.play(165f, 0.12f, sndStyle)
-                                                    // 炸弹：低沉音 + 重震动 + 整屏抖动
-                                                    r.second == ChartAnalyzer.TYPE_BOMB -> {
-                                                        sounds.play(75f, 0.5f, sndStyle)
-                                                        if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                        shakeUntil = SystemClock.elapsedRealtime() + 220
-                                                    }
-                                                    // 加分鼠：高八度亮音（金色粒子）
-                                                    r.second == ChartAnalyzer.TYPE_BONUS -> {
-                                                        sounds.play(CELL_FREQS[cell] * 2f, 0.5f, sndStyle)
-                                                        if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                    }
-                                                    // 命中：按当前手感风格发音 + 轻震动
-                                                    else -> {
-                                                        sounds.play(CELL_FREQS[cell], 0.42f, sndStyle)
-                                                        if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                    }
-                                                }
+                Column(Modifier.fillMaxSize()) {
+                    repeat(3) { row ->
+                        Row(Modifier.fillMaxWidth().weight(1f)) {
+                            repeat(3) { col ->
+                                val cell = row * 3 + col
+                                MoleCellView(
+                                    mole = engine.moles[cell].value,
+                                    now = frameNow,
+                                    floating = engine.floatings.lastOrNull { it.cell == cell },
+                                    flashAge = SystemClock.elapsedRealtime() - engine.cellFlashMs[cell],
+                                    particles = engine.particles.filter { it.cell == cell },
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                    onTap = {
+                                        val r = engine.tap(cell)
+                                        when {
+                                            // 空点：轻"噗"声，无惩罚
+                                            r == null -> sounds.play(165f, 0.12f, sndStyle)
+                                            // 炸弹：低沉音 + 重震动 + 整屏抖动
+                                            r.second == ChartAnalyzer.TYPE_BOMB -> {
+                                                sounds.play(75f, 0.5f, sndStyle)
+                                                if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                shakeUntil = SystemClock.elapsedRealtime() + 220
                                             }
-                                        )
+                                            // 加分鼠：高八度亮音（金色粒子）
+                                            r.second == ChartAnalyzer.TYPE_BONUS -> {
+                                                sounds.play(CELL_FREQS[cell] * 2f, 0.5f, sndStyle)
+                                                if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            }
+                                            // 命中：按当前手感风格发音 + 轻震动
+                                            else -> {
+                                                sounds.play(CELL_FREQS[cell], 0.42f, sndStyle)
+                                                if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            }
+                                        }
                                     }
-                                }
+                                )
                             }
                         }
                     }
                 }
+            }
 
-                // 倒计时
-                if (phase == GamePhase.COUNTDOWN) {
-                    Column(
-                        Modifier
-                            .align(Alignment.Center)
-                            .background(
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                                RoundedCornerShape(16.dp)
-                            )
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
+            // ③ 顶部信息条（浮层：压在像素背景上，加一层半透明底衬保证可读）
+            Column(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            if (countdown > 0) "$countdown" else "开始!",
-                            fontSize = 52.sp,
+                            "分数 ${engine.score}",
+                            style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold
                         )
-                        Text("拍普通鼠 · 捡加分鼠🌟 · 避开炸弹💣", style = MaterialTheme.typography.bodySmall)
+                        if (engine.combo >= 2) {
+                            Text(
+                                "连击 x${engine.combo}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    Text(
+                        "剩余 ${fmtDur(remainSec * 1000)}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    // 暂停键：暂停并弹出暂停菜单（继续/退出/手感/延迟）
+                    IconButton(onClick = {
+                        if (phase == GamePhase.PLAY && !paused) {
+                            paused = true
+                            player.pause()
+                        }
+                        showMenu = true
+                    }) {
+                        Icon(Icons.Default.Pause, contentDescription = "暂停菜单")
                     }
                 }
-
-                // 暂停态由暂停菜单接管（顶部 ⏸ / 返回键打开），不再显示旧遮罩
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp)
+                )
             }
+
+            // ④ 倒计时
+            if (phase == GamePhase.COUNTDOWN) {
+                Column(
+                    Modifier
+                        .align(Alignment.Center)
+                        .background(
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                            RoundedCornerShape(16.dp)
+                        )
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        if (countdown > 0) "$countdown" else "开始!",
+                        fontSize = 52.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text("拍普通鼠 · 捡加分鼠🌟 · 避开炸弹💣", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            // 暂停态由暂停菜单接管（顶部 ⏸ / 返回键打开），不再显示旧遮罩
         }
     }
 
