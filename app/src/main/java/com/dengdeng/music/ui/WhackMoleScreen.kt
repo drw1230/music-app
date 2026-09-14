@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -1165,6 +1166,10 @@ private fun MolePickSongScreen(
                 .thenByDescending { it.dateAdded }
         )
     }
+    // playedMap 是进页面后异步加载的：加载完成触发"玩过置顶"重排时，LazyColumn 会按 key
+    // 保持第一可见项不滚走 → 视觉上列表"没在最顶端"。这里在 map 变化时强制回到顶部
+    val listState = rememberLazyListState()
+    LaunchedEffect(playedMap) { listState.scrollToItem(0) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1185,7 +1190,7 @@ private fun MolePickSongScreen(
                 Text("本地曲库是空的，先去扫描一些歌吧")
             }
         } else {
-            LazyColumn(Modifier.padding(padding).fillMaxSize()) {
+            LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState) {
                 items(sorted, key = { it.id }) { s ->
                     ListItem(
                         headlineContent = { Text(s.title, maxLines = 1) },

@@ -599,21 +599,11 @@ fun PlayerScreen(
             )
         }
 
-        // 在线下载：音源选择弹窗（在线歌直接展示当前音源；本地歌查询 3 平台音源供选择）
+        // 在线下载：音源选择弹窗（本地歌/电台/冷门等在线歌统一走 3 平台完整音源查询，
+        // 可选 标准/高品/无损；电台/冷门歌此前只给"当前音质"单音源，用户 2026-09-14 反馈修复）
         downloadSong?.let { os ->
             OnlineSourceSheet(
                 song = os,
-                fixedSource = if (viewModel.isOnlinePlaying) {
-                    OnlineMetadataFetcher.AudioSource(
-                        platform = "在线播放",
-                        quality = "当前音质",
-                        format = "MP3",
-                        bitrate = 0,
-                        url = song.uri.toString(),
-                        sizeBytes = 0,
-                        vip = false
-                    )
-                } else null,
                 onPlay = null,  // 播放页下载弹窗不需要试听（正在播放当前歌曲）
                 onDownloaded = { viewModel.scanMusic() },
                 onDismiss = { downloadSong = null }
