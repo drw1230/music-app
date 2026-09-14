@@ -153,11 +153,16 @@ fun MainScreen(
     var showRecognize by remember { mutableStateOf(false) }
     // 我的信息页（玩家档案：名字/本地战绩/联网排行榜）
     var showMyInfo by remember { mutableStateOf(false) }
-    // 小游戏入口弹窗（游戏内容打磨中；未取名时顺带取名）
+    // 小游戏入口弹窗（未取名时才弹；取名后直接进游戏中心）
     var showGamePlaceholder by remember { mutableStateOf(false) }
+    // 游戏中心页（已取名时点「小游戏」直接进入）
+    var showGameCenter by remember { mutableStateOf(false) }
+    // 打地鼠游戏（听歌模式）
+    var showWhackMole by remember { mutableStateOf(false) }
 
     // 新版本提醒：启动时后台查一次 GitHub 最新 Release，远端更新则点亮"软件升级"旁的小圆点
     val appContext = LocalContext.current
+    val mainScope = rememberCoroutineScope()
     val currentVersionName = remember {
         try {
             appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: ""
@@ -182,12 +187,24 @@ fun MainScreen(
         return
     }
 
+    if (showWhackMole) {
+        // 打地鼠全屏接管（与播放页同模式）：脱离曲库主界面的重组范围，
+        // 避免嵌在 Scaffold 分支里首帧被主界面重组拖卡（2026-09-13 用户反馈卡顿的修复）
+        BackHandler { showWhackMole = false }
+        WhackMoleScreen(
+            onBack = { showWhackMole = false },
+            songs = viewModel.songs,
+            onPauseMainPlayback = { viewModel.pause() }
+        )
+        return
+    }
+
     Scaffold(
         topBar = {
             // 覆盖界面（智能歌单/电台/搜索）隐藏 DDmusic 主顶栏，让覆盖界面用自己的顶栏更沉浸；
             // 主菜单（睡眠定时/主题/关于/排序/刷新扫描）只在曲库首页通过 ⋮ 进入
             val inOverlay = showRadio || showSmartPlaylist || onlineSearchQuery != null ||
-                    showUpgrade || showRecognize || showMyInfo
+                    showUpgrade || showRecognize || showMyInfo || showGameCenter
             if (!inOverlay) {
                 TopAppBar(
                     title = { Text("DDmusic") },
@@ -309,7 +326,9 @@ fun MainScreen(
             }
         },
         bottomBar = {
-            if (viewModel.nowPlayingSong() != null) {
+            // 游戏中心/我的信息页隐藏迷你播放条（沉浸式，2026-09-13 用户要求）
+            // 注：打地鼠已是全屏接管（early-return），不走这里
+            if (viewModel.nowPlayingSong() != null && !showMyInfo && !showGameCenter) {
                     MiniPlayerBar(
                         viewModel,
                         // 统一用迷你条控制试听；点击迷你条（本地/在线歌均可）进入全屏播放界面操作
@@ -326,6 +345,16 @@ fun MainScreen(
                     SmartPlaylistScreen(
                         viewModel = viewModel,
                         onBack = { showSmartPlaylist = false }
+                    )
+                }
+            }
+            // 游戏中心页（已取名点「小游戏」直接进入；与我的信息一样隐藏迷你播放条）
+            showGameCenter -> {
+                BackHandler { showGameCenter = false }
+                Box(Modifier.padding(padding)) {
+                    GameCenterScreen(
+                        onBack = { showGameCenter = false },
+                        onWhackMole = { showWhackMole = true }
                     )
                 }
             }
@@ -461,7 +490,13 @@ fun MainScreen(
                             },
                             onRadio = { showRadio = true },
                             onSmartPlaylist = { showSmartPlaylist = true },
-                            onGames = { showGamePlaceholder = true }
+                            onGames = {
+                                // 已取名 → 直接进游戏中心；未取名 → 先弹取名框（取名后直接进）
+                                mainScope.launch {
+                                    if (PlayerProfile.hasName(appContext)) showGameCenter = true
+                                    else showGamePlaceholder = true
+                                }
+                            }
                         )
                     }
                 }
@@ -586,25 +621,17 @@ fun MainScreen(
         AboutDialog(onDismiss = { showAbout = false })
     }
 
-    // 小游戏占位弹窗（游戏内容打磨中；未取名时顺带取名——以后成绩与联网排行榜都绑定这个名字）
+    // 取玩家名弹窗（仅未取名时出现；取好名字直接进游戏中心——名字全局唯一，游戏/排行榜/我的信息共用）
     if (showGamePlaceholder) {
         val gameScope = rememberCoroutineScope()
-        var savedName by remember { mutableStateOf<String?>(null) }
         var input by remember { mutableStateOf("") }
-        LaunchedEffect(Unit) {
-            savedName = PlayerProfile.getName(appContext)
-            input = savedName.orEmpty()
-        }
         AlertDialog(
             onDismissRequest = { showGamePlaceholder = false },
-            title = { Text("小游戏") },
+            title = { Text("给自己取个玩家名字") },
             text = {
                 Column {
                     Text(
-                        if (savedName.isNullOrBlank())
-                            "游戏内容打磨中，敬请期待！\n先给自己取个玩家名字，以后游戏成绩和排行榜都绑定它。"
-                        else
-                            "游戏内容打磨中，敬请期待！",
+                        "游戏成绩和联网排行榜都会绑定这个名字（以后可在「我的信息」里改名）",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(12.dp))
@@ -625,11 +652,12 @@ fun MainScreen(
                         gameScope.launch { PlayerProfile.saveName(appContext, finalName) }
                         Toast.makeText(appContext, "已保存：$finalName", Toast.LENGTH_SHORT).show()
                         showGamePlaceholder = false
+                        showGameCenter = true
                     }
-                ) { Text("保存") }
+                ) { Text("保存并进入") }
             },
             dismissButton = {
-                TextButton(onClick = { showGamePlaceholder = false }) { Text("关闭") }
+                TextButton(onClick = { showGamePlaceholder = false }) { Text("取消") }
             }
         )
     }
@@ -1588,7 +1616,7 @@ private fun LibraryHeader(
             ) {
                 Icon(Icons.Default.SportsEsports, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("小游戏", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Text("游戏中心", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
             OutlinedButton(
                 onClick = onRadio,
@@ -2294,6 +2322,9 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                 }
                 FeatureSection("🎤 听歌识曲") {
                     "原生录音识别（ACRCloud 曲库），识别到直接带歌名进搜索"
+                }
+                FeatureSection("🐹 游戏中心") {
+                    "打地鼠·听歌模式：AI 分析歌曲节奏生成谱面；像素风场景带云 / 星星 / 萤火虫动态背景（按时段自动选，也可在菜单手动切换）；玩家档案与联网排行榜见「我的信息」"
                 }
                 FeatureSection("📻 每日电台") {
                     "探索版（榜单 + 随机歌单混合）、熟悉版（相似曲目推荐）；音源检测只推荐能播的歌；每日更新大半新歌"

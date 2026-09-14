@@ -45,6 +45,9 @@ object MusicRecognizer {
     // 实测：真实音频 → HTTP 200 / score 100（ACRCloud 原生识别）。
     private const val AHA_IDENTIFY_URL = "https://aha-music.com/identify"
 
+    /** 哼唱识别端点（同一套协议：body/headers 与 identify 完全一致，只换 URL；2026-09-13 实测 200） */
+    private const val AHA_HUMMING_URL = "https://aha-music.com/humming"
+
     /** 前端固定盐值（源码里的常量 K2，就是 8 个空格）：base64 前拼在音频字节尾部。
      *  不加会被服务端判 400 Missing audio data */
     private const val AHA_SALT = "        "
@@ -94,7 +97,7 @@ object MusicRecognizer {
      * @return WAV 数据；权限缺失或录音失败返回 null
      */
     @SuppressLint("MissingPermission")
-    fun record(seconds: Int = 7): ByteArray? {
+    fun record(seconds: Int = 10): ByteArray? {
         val t0 = System.currentTimeMillis()
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
@@ -197,7 +200,7 @@ object MusicRecognizer {
     }
 
     /**
-     * 识别调度（IO 线程调用）：主引擎 AHA/ACRCloud → ACRCloud 官方密钥（已配置时）→ 兜底 AudD
+     * 识别调度（IO 线程调用）：AHA 识曲 → AHA 哼唱（同一段录音自动兜底，2026-09-13 用户选定）→ ACRCloud 官方密钥（已配置时）→ 兜底 AudD
      * @return 识别结果；未识别 / 超额度 / 网络失败返回 null
      */
     fun recognize(wav: ByteArray): RecognizeResult? {
@@ -205,7 +208,10 @@ object MusicRecognizer {
             Log.i(TAG, "===== 主引擎 AHA(ACRCloud 曲库，免账号) =====")
             val aha = recognizeWithAha(wav)
             if (aha != null) return aha
-            Log.i(TAG, "AHA 未识别/失败 → 尝试下一引擎")
+            Log.i(TAG, "AHA 识曲未识别 → 同一段录音自动转哼唱识别再试")
+            val hum = recognizeWithAha(wav, humming = true)
+            if (hum != null) return hum
+            Log.i(TAG, "哼唱识别也未命中 → 尝试下一引擎")
         }
         if (acrConfigured) {
             Log.i(TAG, "===== ACRCloud 官方密钥 =====")
@@ -228,8 +234,9 @@ object MusicRecognizer {
      *   （注意不是 multipart，用 multipart 会 400 Missing audio data）
      * 返回：data.title / data.artists[0].name / data.duration_ms / data.external_metadata.deezer…
      */
-    private fun recognizeWithAha(wav: ByteArray): RecognizeResult? {
+    private fun recognizeWithAha(wav: ByteArray, humming: Boolean = false): RecognizeResult? {
         val t0 = System.currentTimeMillis()
+        val endpointName = if (humming) "哼唱" else "识曲"
         return try {
             val audio = Base64.encodeToString(
                 wav + AHA_SALT.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
@@ -238,9 +245,9 @@ object MusicRecognizer {
                 put("audio", audio)
                 put("mimeType", "audio/wav")
             }.toString()
-            Log.i(TAG, "AHA 上传: ${wav.size}B 音频 → base64 ${audio.length} 字符")
+            Log.i(TAG, "AHA($endpointName) 上传: ${wav.size}B 音频 → base64 ${audio.length} 字符")
 
-            val conn = (URL(AHA_IDENTIFY_URL).openConnection() as HttpURLConnection).apply {
+            val conn = (URL(if (humming) AHA_HUMMING_URL else AHA_IDENTIFY_URL).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 connectTimeout = 15_000
@@ -263,7 +270,7 @@ object MusicRecognizer {
             val body = stream.bufferedReader().use { it.readText() }
             Log.i(TAG, "AHA 响应（${System.currentTimeMillis() - t0}ms, code=$code）: ${body.take(400)}")
             runCatching { conn.disconnect() }
-            parseAhaResult(body)
+            parseAhaResult(body, source = if (humming) "哼唱识别" else "AHA/ACRCloud")
         } catch (e: Exception) {
             Log.e(TAG, "AHA 请求失败（${System.currentTimeMillis() - t0}ms）", e)
             null
@@ -271,7 +278,7 @@ object MusicRecognizer {
     }
 
     /** 解析 AHA 响应；错误时 body 形如 {"error":true,"statusCode":500,"statusMessage":"..."} */
-    private fun parseAhaResult(body: String): RecognizeResult? {
+    private fun parseAhaResult(body: String, source: String): RecognizeResult? {
         return try {
             val json = JSONObject(body)
             if (json.optBoolean("error", false)) {
@@ -295,7 +302,7 @@ object MusicRecognizer {
                 artist = if (zhArtist.isNotBlank()) zhArtist else artistEn,
                 album = album,
                 query = buildQuery(title, artistEn, zhArtist),
-                source = "AHA/ACRCloud"
+                source = source
             )
         } catch (e: Exception) {
             Log.e(TAG, "AHA 响应解析失败: ${body.take(200)}", e)

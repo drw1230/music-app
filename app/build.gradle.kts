@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -15,8 +17,19 @@ android {
         applicationId = "com.dengdeng.music"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.1.2"
+        versionCode = 10
+        versionName = "1.2.0"
+
+        // 腾讯云 COS 密钥（联网排行榜）：构建时注入，不进仓库（GitHub Push Protection 要求）。
+        // 本机：local.properties 或 secrets.properties（两者都被 .gitignore 排除；后者不
+        // 在 build.sh 的 rsync 排除清单里，WSL 构建也能拿到）。CI：GitHub Actions secrets。
+        val secrets = Properties().apply {
+            for (f in listOf(rootProject.file("local.properties"), rootProject.file("secrets.properties"))) {
+                if (f.exists()) f.inputStream().use { load(it) }
+            }
+        }
+        buildConfigField("String", "COS_SECRET_ID", "\"${secrets.getProperty("COS_SECRET_ID") ?: ""}\"")
+        buildConfigField("String", "COS_SECRET_KEY", "\"${secrets.getProperty("COS_SECRET_KEY") ?: ""}\"")
     }
 
     buildTypes {
@@ -50,6 +63,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     kotlinOptions {

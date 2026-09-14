@@ -1,5 +1,6 @@
 package com.dengdeng.music.data
 
+import com.dengdeng.music.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -34,9 +35,10 @@ object LeaderboardStore {
     /** 桶访问域名（外网），例：https://ddmusic-125xxxxxxx.cos.ap-chongqing.myqcloud.com */
     const val BUCKET_URL = "https://ddmusic-1416625633.cos.ap-chongqing.myqcloud.com"
 
-    /** CAM 子用户密钥（仅授权榜单桶读写）；空 = 上传不可用（只读演示） */
-    const val SECRET_ID = "REDACTED_COS_ID"
-    const val SECRET_KEY = "REDACTED_COS_KEY"
+    /** CAM 子用户密钥（仅授权榜单桶读写），构建时经 BuildConfig 注入，不硬编码进仓库：
+     *  本机 = secrets.properties 或 local.properties（.gitignore 排除）；CI = GitHub Actions secrets */
+    val SECRET_ID = BuildConfig.COS_SECRET_ID
+    val SECRET_KEY = BuildConfig.COS_SECRET_KEY
 
     private const val OBJECT_KEY = "leaderboard.json"
 

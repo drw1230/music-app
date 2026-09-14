@@ -30,7 +30,7 @@ import kotlinx.coroutines.withContext
 
 /** 单次录音秒数（≥5 秒识别率明显更好；环境嘈杂时更长）
  *  注：此常量与 MusicRecognizer.record() 的 seconds 参数一致 */
-private const val RECORD_SECONDS = 7
+private const val RECORD_SECONDS = 10
 
 /** 诊断日志 TAG（与 MusicRecognizer 一致，adb logcat -s DDmusicRec 可单抓识别链路） */
 private const val TAG = "DDmusicRec"

@@ -13,6 +13,7 @@ captures/
 *.iml
 .vscode/
 local.properties
+secrets.properties
 
 # Kotlin
 .kotlin/
