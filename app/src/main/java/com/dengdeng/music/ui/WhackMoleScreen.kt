@@ -92,6 +92,7 @@ class WhackMoleEngine(
         const val HIT_WINDOW_MS = 220L    // 拍点后仍可命中的窗口
         const val BOMB_PENALTY = 50L      // 炸弹误击扣分（待用户试玩后定值）
         const val BONUS_SCORE = 30L       // 加分鼠命中得分（固定值，待用户试玩后定）
+        const val BOMB_CELL_SAFE_MS = 450L // 炸弹鼠不落在刚被拍过的格子（否则"我在打上一只"却判误击）
     }
 
     class Floating(val id: Int, val cell: Int, val text: String, val kind: Int, val createdAt: Long) // kind: 0=得分 1=扣分 2=漏 3=加分鼠
@@ -109,6 +110,7 @@ class WhackMoleEngine(
     val floatings = mutableStateListOf<Floating>()
     val particles = mutableStateListOf<Particle>()
     val cellFlashMs = LongArray(9)      // 每格最近一次被点击的时间戳（点击闪光反馈用）
+    private val cellFreeAtMs = LongArray(9) { -100_000L }   // 每格最近一次空出来的时刻
     var score by mutableStateOf(0L); private set
     var combo by mutableStateOf(0); private set
     var maxCombo = 0; private set
@@ -163,10 +165,17 @@ class WhackMoleEngine(
             val ev = events[idx++]
             val free = (0..8).filter { moles[it].value == null }
             if (free.isEmpty()) continue
-            val cell = free.random()
+            // 炸弹鼠避开「刚被拍过 / 刚缩回」的格子：否则会出现"我明明在打上一只鼠，
+            // 却被判误击炸弹"的不公平感（用户反馈的"不小心点到"应该只是手滑）
+            val cell = if (ev.type == ChartAnalyzer.TYPE_BOMB) {
+                val safe = free.filter { nowMs - cellFreeAtMs[it] >= BOMB_CELL_SAFE_MS }
+                (if (safe.isNotEmpty()) safe else free).random()
+            } else {
+                free.random()
+            }
             moles[cell].value = Mole(ev, cell, ev.timeMs - LEAD_MS, ev.timeMs + HIT_WINDOW_MS)
         }
-        // 过期（普通鼠漏掉 → 连击减半）
+        // 过期（普通鼠漏掉 → 连击减半；炸弹鼠自然消失，不罚）
         for (i in 0..8) {
             val m = moles[i].value ?: continue
             if (nowMs > m.deadlineMs) {
@@ -176,6 +185,7 @@ class WhackMoleEngine(
                     addFloat(i, "漏!", 2)
                 }
                 moles[i].value = null
+                cellFreeAtMs[i] = nowMs
             }
         }
     }
@@ -183,6 +193,8 @@ class WhackMoleEngine(
     /** 点击某格：null=空格无事件；否则返回 (分值/扣分, 鼠类型)。任何点击都记录闪光与粒子 */
     fun tap(cell: Int): Pair<Long, Int>? {
         cellFlashMs[cell] = SystemClock.elapsedRealtime()
+        // 无论命中还是空点，这段时间内炸弹鼠都不落这一格（防"手滑被判误击"的冤枉感）
+        cellFreeAtMs[cell] = now
         val m = moles[cell].value
         if (m == null) {
             burst(cell, 0)   // 空点也有轻微反馈粒子
@@ -633,6 +645,88 @@ internal class HitSounds {
     fun release() {
         runCatching { track?.release() }
         track = null
+        runCatching { fxTrack?.release() }
+        fxTrack = null
+        fxBuilt = -1
+    }
+
+    // ────────── 专属音效（炸弹 / 加分鼠） ──────────
+    // 与按键音分开独立缓冲：这两类音效比按键音长得多（320ms vs 90ms），
+    // 且必须"一听就分得出来"——不能只是按键音换个音高（用户 2026-09-14 反馈）。
+    private val fxSamples = sampleRate * 320 / 1000
+    private var fxTrack: AudioTrack? = null
+    private var fxBuilt = -1
+
+    /**
+     * 专属音效：13 = 炸弹爆炸、14 = 加分鼠金币音。
+     * 音量走 AudioTrack.setVolume（缓冲按 style 缓存，可复用）。
+     */
+    fun playFx(style: Int, amp: Float = 0.75f) {
+        try {
+            val bytes = fxSamples * 2
+            val t = fxTrack ?: AudioTrack(
+                AudioManager.STREAM_MUSIC, sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT, bytes,
+                AudioTrack.MODE_STATIC
+            ).also { fxTrack = it }
+            if (fxBuilt != style) {
+                val buf = ShortArray(fxSamples)
+                if (style == 13) synthBomb(buf) else synthBonus(buf)
+                t.write(buf, 0, fxSamples)
+                fxBuilt = style
+            }
+            runCatching { t.pause() }
+            t.reloadStaticData()
+            t.setVolume(amp)
+            t.play()
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * 炸弹爆炸：起爆炸裂（极短高频噪声）+ 爆破主体噪声 + 低频冲击下滑（130→42Hz）
+     * + 中频"炸"体（手机小喇叭推不动纯低频，必须有中频成分）+ 余震。
+     * 末端 40ms 淡出，避免爆尾"啪"声。
+     */
+    private fun synthBomb(out: ShortArray) {
+        val dur = out.size.toDouble() / sampleRate
+        for (i in out.indices) {
+            val t = i.toDouble() / sampleRate
+            val p = (t / dur).coerceAtMost(1.0)
+            val crack = (Math.random() - 0.5) * Math.exp(-t * 55.0) * 1.1
+            val blast = (Math.random() - 0.5) * Math.exp(-t * 11.0) * 0.75
+            val boom = Math.sin(2 * Math.PI * 130.0 * (1.0 - 0.68 * p) * t) * Math.exp(-t * 8.0) * 0.8
+            val mid = Math.sin(2 * Math.PI * 320.0 * t) * Math.exp(-t * 30.0) * 0.4
+            val rumble = Math.sin(2 * Math.PI * 58.0 * t) * Math.exp(-t * 12.0) * 0.35
+            val tail = if (t > dur - 0.04) ((dur - t) / 0.04) else 1.0
+            // tanh 软削波：起爆瞬间自然饱和（爆音本色），不做硬切
+            val v = Math.tanh((crack + blast + boom + mid + rumble) * 1.05) * tail
+            out[i] = (v * 0.95 * Short.MAX_VALUE).toInt()
+                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+    }
+
+    /**
+     * 加分鼠：经典金币音（B5 短促 → E6 长鸣），方波为主 + 高频泛音做"铃"感，
+     * 一听就是"赚到了"。同样末端淡出。
+     */
+    private fun synthBonus(out: ShortArray) {
+        val dur = out.size.toDouble() / sampleRate
+        val seg = 0.075
+        for (i in out.indices) {
+            val t = i.toDouble() / sampleRate
+            val first = t < seg
+            val f = if (first) 987.77 else 1318.51
+            val tt = if (first) t else t - seg
+            val env = Math.exp(-tt * (if (first) 14.0 else 9.0))
+            val sq = if (Math.sin(2 * Math.PI * f * t) >= 0) 1.0 else -1.0
+            val bell = Math.sin(2 * Math.PI * f * 3.0 * t) * 0.22 +
+                    Math.sin(2 * Math.PI * f * 4.2 * t) * 0.10
+            val tail = if (t > dur - 0.04) ((dur - t) / 0.04) else 1.0
+            val v = (sq * 0.62 + bell) * env * tail
+            out[i] = (v * 0.9 * Short.MAX_VALUE).toInt()
+                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
     }
 }
 
@@ -1068,8 +1162,8 @@ private fun MoleMenuDialog(
                 // 玩法说明
                 Text("玩法说明", fontWeight = FontWeight.Bold)
                 Text("🐹 普通鼠：拍点出现，点掉得分", style = MaterialTheme.typography.bodySmall)
-                Text("💣 炸弹鼠：只在没节奏的空拍出现，千万别碰！误击扣 ${WhackMoleEngine.BOMB_PENALTY} 分且连击减半", style = MaterialTheme.typography.bodySmall)
-                Text("🌟 加分鼠：只出现在节奏高潮处，打到 +${WhackMoleEngine.BONUS_SCORE} 分（漏掉不扣）", style = MaterialTheme.typography.bodySmall)
+                Text("💣 炸弹鼠：钻在两拍之间的空档（约每 30 秒一只），千万别碰！误击扣 ${WhackMoleEngine.BOMB_PENALTY} 分且连击减半，有专属爆炸音效", style = MaterialTheme.typography.bodySmall)
+                Text("🌟 加分鼠：只出现在节奏高潮处，打到 +${WhackMoleEngine.BONUS_SCORE} 分（漏掉不扣），有专属加分音效", style = MaterialTheme.typography.bodySmall)
                 Text("🔥 连击：连续命中加分，漏掉/碰炸弹 → 连击减半", style = MaterialTheme.typography.bodySmall)
             }
         },
@@ -1452,15 +1546,15 @@ private fun WhackMoleGameScreen(
                                         when {
                                             // 空点：轻"噗"声，无惩罚
                                             r == null -> sounds.play(165f, 0.12f, sndStyle)
-                                            // 炸弹：低沉音 + 重震动 + 整屏抖动
+                                            // 炸弹：专属爆炸音效 + 重震动 + 整屏抖动
                                             r.second == ChartAnalyzer.TYPE_BOMB -> {
-                                                sounds.play(75f, 0.5f, sndStyle)
+                                                sounds.playFx(13)
                                                 if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 shakeUntil = SystemClock.elapsedRealtime() + 220
                                             }
-                                            // 加分鼠：高八度亮音（金色粒子）
+                                            // 加分鼠：专属金币音（B5→E6）+ 金色粒子
                                             r.second == ChartAnalyzer.TYPE_BONUS -> {
-                                                sounds.play(CELL_FREQS[cell] * 2f, 0.5f, sndStyle)
+                                                sounds.playFx(14, 0.7f)
                                                 if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                             }
                                             // 命中：按当前手感风格发音 + 轻震动

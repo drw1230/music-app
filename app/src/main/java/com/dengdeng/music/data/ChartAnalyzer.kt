@@ -23,7 +23,8 @@ import kotlin.math.sqrt
  * 1. MediaExtractor+MediaCodec 把整首歌解成 PCM，按 100ms 窗口算 RMS 能量曲线（不存音频，只存曲线）
  * 2. 由能量曲线生成谱面事件（绝对时间）：
  *    - 能量抬升（相对局部均值 +15%）→ 普通鼠
- *    - 能量凹谷（低于局部均值 45%）→ 炸弹鼠（对应休止符"该响没响"），比例封顶 ~16%
+ *    - 普通鼠之间的长间隔（≥1.1s）中点 → 炸弹鼠（"两拍之间别乱点"，约每 30s 一只）
+ *    - 节奏高潮（能量前 15%）处的普通鼠按概率转化 → 加分鼠
  *    - 平缓段按概率放普通鼠，保证密度；密度随进度从 ~650ms 一只 收紧到 ~420ms
  * 3. 结果缓存到 cacheDir（key = songId + 时长），每首歌只分析一次
  *
@@ -48,8 +49,9 @@ object ChartAnalyzer {
 
     suspend fun analyze(ctx: Context, uri: Uri, songId: Long, durationMs: Long): Chart =
         withContext(Dispatchers.Default) {
-            // v3：炸弹鼠改放「不该出节奏」的空拍 + 新增加分鼠（高潮按概率转化），老缓存作废
-            val cache = File(ctx.cacheDir, "wm_chart_v3_${songId}_${durationMs}.json")
+            // v4：炸弹鼠改插「普通鼠之间的长间隔中点」（旧版要前后 900ms 无事件，
+            //     实测 3/4 首歌生不出炸弹）——老缓存作废
+            val cache = File(ctx.cacheDir, "wm_chart_v4_${songId}_${durationMs}.json")
             runCatching { fromJson(JSONObject(cache.readText())) }.getOrNull() ?: run {
                 val chart = decode(ctx, uri, songId)
                 runCatching { cache.writeText(toJson(chart).toString()) }
@@ -198,7 +200,6 @@ object ChartAnalyzer {
         }
 
         val events = ArrayList<ChartEvent>(2048)
-        var bombs = 0
 
         fun gapAt(tMs: Long): Long {
             val progress = tMs.toFloat() / durationMs
@@ -237,24 +238,36 @@ object ChartAnalyzer {
             }
         }
 
-        // ── 3) 炸弹鼠：放在「不该出节奏」的空拍里 —— 前后 900ms 内没有任何谱面事件、
-        //        局部能量明显塌陷（真休止/空拍），候选再按概率抽取；间距与比例封顶 ──
-        var lastBomb = -10_000L
-        for (i in 2 until n - 2) {
-            val v = smooth[i]
-            val isValley = v <= smooth[i - 1] && v <= smooth[i + 1] && v <= smooth[i - 2] && v <= smooth[i + 2]
-            if (!isValley) continue
-            if (v > localMean[i] * 0.55f || v > 0.15f) continue
-            val t = i * WINDOW_MS
+        // 炸弹鼠数量目标：约每 30 秒一只（上限 12 只）
+        val bombTarget = (durationMs / 30_000L).toInt().coerceIn(1, 12)
+
+        // ── 3) 炸弹鼠：插在两拍之间的「长间隔」里 —— 干扰但不设陷阱 ──
+        // ⚠️ 旧版要求「前后 900ms 内没有任何谱面事件 + 能量深谷」，而普通鼠中位间隔只有
+        //    800~900ms（手机实测 4 首歌里 3 首炸弹数 = 0），等于根本没有炸弹鼠。
+        //    现改为：取相邻普通鼠间隔 ≥1.1s 的对，在间隔 42% 处落点
+        //    （≥1.5s 的间隔取正中点）——前方留 ≥460ms、后方留 ≥640ms 刹车余量。
+        val normals = events.filter { it.type == TYPE_NORMAL }.map { it.timeMs }
+        val cand = ArrayList<Long>()
+        for (k in 0 until normals.size - 1) {
+            val a = normals[k]
+            val b = normals[k + 1]
+            val gapLen = b - a
+            if (gapLen < 1100) continue
+            val t = if (gapLen >= 1500) (a + b) / 2 else a + (gapLen * 42 / 100)
             if (t < 1500 || t > durationMs - 600) continue
-            if (t - lastBomb < 1400) continue
-            if (events.any { abs(it.timeMs - t) < 900 }) continue
-            if (bombs * 6 >= events.size + 1) break
-            if (rnd.nextFloat() > 0.8f) continue    // 按概率刷新
-            events.add(ChartEvent(t, TYPE_BOMB))
-            bombs++
-            lastBomb = t
+            cand.add(t)
         }
+        // 候选乱序 + 概率抽取：保证间距 ≥2s，且不贴着任何谱面事件
+        java.util.Collections.shuffle(cand, rnd)
+        val bombTimes = ArrayList<Long>()
+        for (t in cand) {
+            if (bombTimes.size >= bombTarget) break
+            if (bombTimes.any { abs(it - t) < 2000 }) continue
+            if (events.any { abs(it.timeMs - t) < 460 }) continue
+            if (rnd.nextFloat() > 0.75f) continue
+            bombTimes.add(t)
+        }
+        for (t in bombTimes) events.add(ChartEvent(t, TYPE_BOMB))
 
         // ── 4) 加分鼠：节奏高潮处的普通鼠按概率转化（高潮 = 峰能量进入全曲前 15%，
         //        且显著高于局部均值）；最少间隔 3s、数量封顶 ≈5%，漏掉不扣 ──

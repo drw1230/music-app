@@ -595,7 +595,7 @@ private fun TileHomeScreen(
             Spacer(Modifier.height(14.dp))
             Text("下落速度", fontWeight = FontWeight.Bold)
             Text(
-                "只影响方块可见时间（反应压力），不改判定容差",
+                "越打越快：经典按块数、街机按歌曲进度自动加速到该档位极限（快档≈每秒 5 块）。只影响反应窗口，不改判定容差。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -630,6 +630,37 @@ private fun TileHomeScreen(
 private fun fmtSec(ms: Long): String {
     val s = ms / 1000.0
     return String.format(java.util.Locale.CHINA, "%.1f 秒", s)
+}
+
+// ════════════════════════════ 下落速度递增 ════════════════════════════
+
+/**
+ * 当前「方块从屏幕顶落到判定线」的时长（ms）——越小越快、反应窗口越窄。
+ *
+ * p = 本局进度 0..1：经典按已打块数 /50，街机按对局时间 /歌曲时长；
+ * 按 p^1.15（微 ease-in）从「起手看得清」加速到该档位的极限值。
+ *
+ * 极限值（用户 2026-09-14 要求"最快的档位应该加速到玩家速度的极限"）：
+ * 快档终点 200ms ≈ 每秒 5 块，已接近单指连点的人类反应极限——到这个速度基本
+ * 只能靠听歌预判落点，而不是靠眼睛看到再反应。想改手感就调这三个数字。
+ */
+private fun rampSpeedMs(speed: Int, p: Float): Long {
+    val start: Float
+    val limit: Float
+    when (speed) {
+        0 -> { start = 1150f; limit = 430f }   // 慢
+        2 -> { start = 620f; limit = 200f }    // 快（极限）
+        else -> { start = 880f; limit = 300f } // 中
+    }
+    val e = Math.pow(p.coerceIn(0f, 1f).toDouble(), 1.15).toFloat()
+    return (start + (limit - start) * e).toLong().coerceAtLeast(120L)
+}
+
+/** 接力模式不做递增（用户只要求经典/街机），沿用原固定档位 */
+private fun fixedSpeedMs(speed: Int): Long = when (speed) {
+    0 -> 1200L
+    2 -> 560L
+    else -> 800L
 }
 
 // ════════════════════════════ 选歌页 ════════════════════════════
@@ -689,13 +720,19 @@ private fun TilePlayScreen(
     var gameKey by remember { mutableStateOf(0) }
     val engine = remember(gameKey) { TileEngine(chart, 0L, chart.durationMs, mode) }
     val palette = rememberTilePalette()
-    // 三档难度整体上调（用户 2026-09-14 反馈整体太简单）。
-    // speedMs = 方块从屏幕顶落到判定线的总时长，越小越快、反应时间越短。
-    // 旧值 慢1500 / 中1050 / 快750 → 新值 慢1200 / 中800 / 快560（快约 20~25%）
-    val speedMs = when (speed) {
-        0 -> 1200L
-        2 -> 560L
-        else -> 800L
+    // 难度已整体上调（用户 2026-09-14 反馈太简单）→ 现在再叠一层「速度递增」：
+    // 经典按块数进度、街机按对局时间，从起手速度加速到该档位极限；
+    // 接力不递增，保持固定档位。speedMs 越小 = 反应窗口越窄。
+    val speedMs = when (mode) {
+        TileMode.CLASSIC -> rampSpeedMs(
+            speed,
+            engine.hitTiles.toFloat() / TileEngine.CLASSIC_TILES
+        )
+        TileMode.ARCADE -> rampSpeedMs(
+            speed,
+            engine.now.toFloat() / chart.durationMs.coerceAtLeast(1L)
+        )
+        TileMode.RELAY -> fixedSpeedMs(speed)
     }
 
     val player = remember {
