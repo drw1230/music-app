@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +25,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerId
@@ -69,9 +71,22 @@ import kotlin.math.sin
 // ════════════════════════════ 模式 ════════════════════════════
 
 internal enum class TileMode(val id: Int, val label: String, val rule: String) {
-    CLASSIC(0, "经典", "前 50 块 · 比完成用时"),
-    ARCADE(1, "街机", "整首歌 · 冲最高分"),
+    CLASSIC(0, "经典", "打完本局方块 · 比完成用时（最多 50 块）"),
+    ARCADE(1, "街机", "本局片段 · 冲最高分"),
     RELAY(2, "接力", "每 50 块一段 · 零失误接上，成绩看连续段数")
+}
+
+/**
+ * 体验时长分档（用户 2026-09-15："原歌曲的太长了，像打地鼠那样分时长模式"）。
+ *
+ * 口径与打地鼠完全一致（`WhackMoleScreen` 的 35s / 120s / 整首）：
+ * 选完歌弹窗选档 → `ChartAnalyzer.pickWindow` 取能量最高的连续片段 → 只玩这一段。
+ * `targetMs = 0` 表示整首（不做窗口截取）。
+ */
+internal enum class TileDuration(val label: String, val desc: String, val targetMs: Long) {
+    QUICK("⚡ 快速模式（推荐）", "只玩 30~40 秒精彩片段", 35_000L),
+    NORMAL("🎮 正常模式", "约 2 分钟的精华段落", 120_000L),
+    FULL("🎧 完整模式", "跟着整首歌打到底", 0L)
 }
 
 // ════════════════════════════ 谱面 → 方块 ════════════════════════════
@@ -210,12 +225,39 @@ internal class TileEngine(
          * 想改用 `RECOVER_TILES`；想改成"按分数恢复"就在这里加个分数阈值。
          */
         const val RECOVER_TILES = 30
+
+        /**
+         * 窗口起点之后留出的下落可见时间（2026-09-15，配合「体验时长分档」）。
+         * 方块只有在落进屏幕后才看得见（可见时间 ≈ speedMs，最快档 620→200ms），
+         * 若窗口第一块紧贴起点 → 玩家**看不见就被判漏**。所以从窗口中途开始时
+         * 忽略前 1.5s 的方块（完整模式起点为 0，保持原样不动）。
+         */
+        const val LEAD_MS = 1500L
     }
 
-    /** 本局要打的方块（经典模式只取前 50 块） */
+    /** 本局窗口时长（速度递增按它算进度；窗口 = 完整时长时等于整首） */
+    val windowMs: Long get() = (endMs - startMs).coerceAtLeast(1L)
+
+    // 从窗口中途开始时跳过开头 1.5s 的方块（见 LEAD_MS）
+    private val noteFromMs = if (startMs > 0L) startMs + LEAD_MS else startMs
+
+    /**
+     * 本局要打的方块。
+     * - 经典模式只取前 50 块 → `notes.size` 就是本局目标块数（窗口短时可能不足 50）
+     * - 其余模式取窗口内全部
+     */
     val notes: List<TileNote> = buildTiles(chart)
-        .filter { it.timeMs >= startMs && it.timeMs <= endMs }
+        .filter { it.timeMs >= noteFromMs && it.timeMs <= endMs }
         .let { if (mode == TileMode.CLASSIC) it.take(CLASSIC_TILES) else it }
+
+    /**
+     * 接力模式的"一段"块数。
+     * 短窗口（快速档 35s 只有 ~45 块）不足 50 块时按实际块数算 —— 否则一段永远接不上，
+     * 接力成绩恒为 0（2026-09-15 上时长分档时发现并处理）。
+     */
+    private val segmentTiles: Int =
+        if (mode == TileMode.RELAY) minOf(SEGMENT_TILES, notes.size).coerceAtLeast(1)
+        else SEGMENT_TILES
 
     private val states = Array(notes.size) { mutableStateOf(NoteState.PENDING) }
     private val judgedAt = LongArray(notes.size) { -1L }
@@ -323,7 +365,7 @@ internal class TileEngine(
     /** 接力：每段结束结算（零失误 → 接上，恢复 1 次失误额度） */
     private fun advanceSegment() {
         if (mode != TileMode.RELAY) return
-        if (segProgress < SEGMENT_TILES) return
+        if (segProgress < segmentTiles) return
         relaySegments++
         segProgress = 0
         if (!segMissed) {
@@ -353,8 +395,10 @@ internal class TileEngine(
             if (nowMs > t + GOOD_MS) miss(i, NoteState.MISS)
         }
         if (mode == TileMode.CLASSIC) {
-            if (hitTiles >= CLASSIC_TILES) finished = true
-        } else if (resolved >= notes.size) {
+            // 目标块数 = notes.size（窗口短时可能不足 50 块 → 打完本局全部方块即通关；
+            // 用 CLASSIC_TILES 会让短窗口永远不结算）
+            if (notes.isNotEmpty() && hitTiles >= notes.size) finished = true
+        } else if (notes.isEmpty() || resolved >= notes.size) {
             finished = true
         }
     }
@@ -394,7 +438,7 @@ internal class TileEngine(
         if (firstHitMs < 0) firstHitMs = notes[i].timeMs
         lastHitMs = holdEnds[i]
         noteHitForRecover()
-        if (mode == TileMode.CLASSIC && hitTiles >= CLASSIC_TILES) finished = true
+        if (mode == TileMode.CLASSIC && hitTiles >= notes.size) finished = true
         advanceSegment()
     }
 
@@ -485,7 +529,7 @@ internal class TileEngine(
         resolved++
         segProgress++
         noteHitForRecover()
-        if (mode == TileMode.CLASSIC && hitTiles >= CLASSIC_TILES) finished = true
+        if (mode == TileMode.CLASSIC && hitTiles >= notes.size) finished = true
         advanceSegment()
         return Triple(st, pts, false)
     }
@@ -602,7 +646,14 @@ fun TileGameScreen(
 
     var gameSong by remember { mutableStateOf<Song?>(null) }
     var gameChart by remember { mutableStateOf<ChartAnalyzer.Chart?>(null) }
+    // 本局片段窗口（快速/正常档由 pickWindow 选出；完整档 = 0 到整首）
+    var gameStartMs by remember { mutableStateOf(0L) }
+    var gameEndMs by remember { mutableStateOf(0L) }
     var analyzing by remember { mutableStateOf(false) }
+    // 选歌后待选时长的歌（弹「体验时长分档」窗）
+    var pendingSong by remember { mutableStateOf<Song?>(null) }
+    // 玩过的歌（选歌页"玩过置顶"，与打地鼠同一套排序口径）
+    var playedMap by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
 
     LaunchedEffect(Unit) {
         speed = TileStore.speed(ctx)
@@ -614,27 +665,49 @@ fun TileGameScreen(
 
     LaunchedEffect(page) {
         if (page == TilePage.GAME) onPauseMainPlayback()
+        if (page == TilePage.PICK) playedMap = TileStore.lastPlayedMap(ctx)
     }
 
-    // 选歌 → 分析谱面 → 进对局
-    val beginGame: (Song) -> Unit = { s ->
+    // 选歌 → 选时长 → 分析谱面（含片段窗口）→ 进对局
+    val beginGame: (Song, Long) -> Unit = { s, targetMs ->
         analyzing = true
         scope.launch(Dispatchers.IO) {
             val chart = runCatching { ChartAnalyzer.analyze(ctx, s.uri, s.id, s.durationMs) }.getOrNull()
+            // 没找到可用节拍 → 不进对局（否则会出现"一条方块都没有"的空局）
+            val window: Pair<Long, Long>? = if (chart == null) null else {
+                val hasBeat = chart.events.any {
+                    it.type == ChartAnalyzer.TYPE_NORMAL || it.type == ChartAnalyzer.TYPE_BONUS
+                }
+                when {
+                    !hasBeat -> null
+                    targetMs > 0L -> ChartAnalyzer.pickWindow(chart, targetMs)
+                    else -> 0L to chart.durationMs
+                }
+            }
             withContext(Dispatchers.Main) {
                 analyzing = false
-                if (chart == null) {
-                    Toast.makeText(ctx, "这首歌分析失败，换一首试试", Toast.LENGTH_SHORT).show()
-                } else {
-                    gameSong = s
-                    gameChart = chart
-                    page = TilePage.GAME
+                when {
+                    chart == null ->
+                        Toast.makeText(ctx, "这首歌分析失败，换一首试试", Toast.LENGTH_SHORT).show()
+                    window == null ->
+                        Toast.makeText(ctx, "这首歌没找到可用的节拍，换一首试试", Toast.LENGTH_SHORT).show()
+                    else -> {
+                        gameSong = s
+                        gameChart = chart
+                        gameStartMs = window.first
+                        gameEndMs = window.second
+                        // 记忆歌单：记下"玩过这首"（选歌页下次会把它置顶）
+                        scope.launch { TileStore.markPlayed(ctx, s.id, s.durationMs) }
+                        page = TilePage.GAME
+                    }
                 }
             }
         }
     }
 
-    BackHandler(enabled = page != TilePage.GAME) { if (page == TilePage.PICK) page = TilePage.HOME else onBack() }
+    BackHandler(enabled = page != TilePage.GAME && pendingSong == null) {
+        if (page == TilePage.PICK) page = TilePage.HOME else onBack()
+    }
 
     when (page) {
         TilePage.HOME -> TileHomeScreen(
@@ -654,8 +727,9 @@ fun TileGameScreen(
 
         TilePage.PICK -> TilePickSongScreen(
             songs = songs,
+            playedMap = playedMap,
             onBack = { page = TilePage.HOME },
-            onPick = beginGame
+            onPick = { pendingSong = it }   // 先选时长（快速/正常/完整），确认后才分析谱面
         )
 
         TilePage.GAME -> {
@@ -667,6 +741,8 @@ fun TileGameScreen(
                 TilePlayScreen(
                     song = song,
                     chart = chart,
+                    startMs = gameStartMs,
+                    endMs = gameEndMs,
                     mode = mode,
                     speed = speed,
                     latencyMs = latencyMs,
@@ -700,6 +776,46 @@ fun TileGameScreen(
                 )
             }
         }
+    }
+
+    // ── 体验时长分档（选歌后弹窗；档位与打地鼠一致，快速=推荐）──
+    val pending = pendingSong
+    if (pending != null) {
+        AlertDialog(
+            onDismissRequest = { pendingSong = null },
+            title = { Text("选择体验时长") },
+            text = {
+                Column {
+                    Text(
+                        "《${pending.title}》",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    TileDuration.entries.forEach { d ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (d == TileDuration.QUICK)
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    pendingSong = null
+                                    beginGame(pending, d.targetMs)
+                                }
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(d.label, fontWeight = FontWeight.Bold)
+                                Text(d.desc, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            },
+            confirmButton = {}
+        )
     }
 
     if (analyzing) {
@@ -751,7 +867,8 @@ private fun TileHomeScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Text(
-                "4 条轨道 · 白块别碰 · 黑色方块跟着歌曲节拍下落，块底落到底就点掉；长条要按住、并排两块要同时按",
+                "4 条轨道 · 白块别碰 · 黑色方块跟着歌曲节拍下落，块底落到底就点掉；长条要按住、并排两块要同时按。\n" +
+                    "选好歌后再选体验时长：快速 30~40 秒 / 正常约 2 分钟 / 完整整首。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -818,7 +935,7 @@ private fun TileHomeScreen(
 
             Spacer(Modifier.height(10.dp))
             Text(
-                "规则：允许 3 次失误（漏块、踩白块、长按中途松手），失误用尽即结束；连续 30 块零失误回 1 次机会（上限始终 3 次）。经典模式只取前 50 块。",
+                "规则：允许 3 次失误（漏块、踩白块、长按中途松手），失误用尽即结束；连续 30 块零失误回 1 次机会（上限始终 3 次）。经典模式打完本局全部方块即通关（最多取前 50 块）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -869,10 +986,22 @@ private fun fixedSpeedMs(speed: Int): Long = when (speed) {
 @Composable
 private fun TilePickSongScreen(
     songs: List<Song>,
+    playedMap: Map<String, Long>,
     onBack: () -> Unit,
     onPick: (Song) -> Unit
 ) {
-    val sorted = remember(songs) { songs.sortedByDescending { it.dateAdded } }
+    // 排序（用户 2026-09-15："别踩白块同样需要记忆歌单，参考打地鼠的歌单排序"）：
+    // 玩过的全部置顶（最近玩过在前），没玩过的按添加时间从新到旧 —— 与 MolePickSongScreen 同一口径
+    val sorted = remember(songs, playedMap) {
+        songs.sortedWith(
+            compareByDescending<Song> { playedMap["${it.id}_${it.durationMs}"] ?: 0L }
+                .thenByDescending { it.dateAdded }
+        )
+    }
+    // playedMap 是进页面后异步加载的：加载完成触发"玩过置顶"重排时，LazyColumn 会按 key
+    // 保持第一可见项不滚走 → 视觉上列表没在最顶端。map 变化时强制回顶部（同打地鼠）
+    val listState = rememberLazyListState()
+    LaunchedEffect(playedMap) { listState.scrollToItem(0) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -883,7 +1012,7 @@ private fun TilePickSongScreen(
             )
         }
     ) { padding ->
-        LazyColumn(Modifier.padding(padding).fillMaxSize()) {
+        LazyColumn(Modifier.padding(padding).fillMaxSize(), state = listState) {
             items(sorted, key = { it.id }) { s ->
                 ListItem(
                     headlineContent = { Text(s.title, maxLines = 1) },
@@ -906,6 +1035,10 @@ private enum class TilePhase { COUNTDOWN, PLAY, RESULT }
 private fun TilePlayScreen(
     song: Song,
     chart: ChartAnalyzer.Chart,
+    /** 本局片段起点（完整模式 = 0；快速/正常 = `ChartAnalyzer.pickWindow` 选出的精彩段起点） */
+    startMs: Long,
+    /** 本局片段终点（完整模式 = 歌曲时长） */
+    endMs: Long,
     mode: TileMode,
     speed: Int,
     latencyMs: Long,
@@ -918,7 +1051,7 @@ private fun TilePlayScreen(
     val scope = rememberCoroutineScope()
     val sounds = remember { HitSounds() }
     var gameKey by remember { mutableStateOf(0) }
-    val engine = remember(gameKey) { TileEngine(chart, 0L, chart.durationMs, mode) }
+    val engine = remember(gameKey) { TileEngine(chart, startMs, endMs, mode) }
     val palette = rememberTilePalette()
     // 难度已整体上调（用户 2026-09-14 反馈太简单）→ 现在再叠一层「速度递增」：
     // 经典按块数进度、街机按对局时间，从起手速度加速到该档位极限；
@@ -929,11 +1062,11 @@ private fun TilePlayScreen(
     fun currentSpeedMs(): Long = when (mode) {
         TileMode.CLASSIC -> rampSpeedMs(
             speed,
-            engine.hitTiles.toFloat() / TileEngine.CLASSIC_TILES
+            engine.hitTiles.toFloat() / engine.totalNotes.coerceAtLeast(1)
         )
         TileMode.ARCADE -> rampSpeedMs(
             speed,
-            engine.now.toFloat() / chart.durationMs.coerceAtLeast(1L)
+            ((engine.now - startMs).toFloat() / engine.windowMs).coerceIn(0f, 1f)
         )
         TileMode.RELAY -> fixedSpeedMs(speed)
     }
@@ -968,10 +1101,11 @@ private fun TilePlayScreen(
         reported = true
         player.pause()
         phase = TilePhase.RESULT
-        // 经典：只有打满 50 块才算有效成绩——中途失误用尽时 usedMs 是残局数据，
-        // 直接提交会把「最佳用时」冲成 0（2026-09-14 真机验证踩到的坑）
+        // 经典：只有打满本局全部方块才算有效成绩——中途失误用尽时 usedMs 是残局数据，
+        // 直接提交会把「最佳用时」冲成 0（2026-09-14 真机验证踩到的坑）。
+        // 目标块数用 engine.totalNotes（快速/正常档的窗口可能不足 50 块）
         val completed = if (mode == TileMode.CLASSIC) {
-            engine.hitTiles >= TileEngine.CLASSIC_TILES
+            engine.totalNotes > 0 && engine.hitTiles >= engine.totalNotes
         } else {
             !engine.failed
         }
@@ -983,6 +1117,8 @@ private fun TilePlayScreen(
         paused = false
         reported = false
         player.setMediaItem(MediaItem.fromUri(song.uri))
+        // 片段模式：从精彩段起点开始播（判定时间轴 = 歌曲绝对时间，所以 seek 后直接对上）
+        if (startMs > 0L) player.seekTo(startMs)
         player.prepare()
         phase = TilePhase.COUNTDOWN
         countdown = 3
@@ -1101,7 +1237,7 @@ private fun TilePlayScreen(
             Column(Modifier.weight(1f)) {
                 Text("${engine.score}", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 val sub = when (mode) {
-                    TileMode.CLASSIC -> "经典 · ${engine.classicProgress}/${TileEngine.CLASSIC_TILES}"
+                    TileMode.CLASSIC -> "经典 · ${engine.classicProgress}/${engine.totalNotes}"
                     TileMode.ARCADE -> "街机 · ${engine.hitTiles} 块"
                     TileMode.RELAY -> "接力 · 第 ${engine.relayStreak + 1} 段 · 已接 ${engine.relayMaxStreak}"
                 }
@@ -1242,7 +1378,7 @@ private fun TilePlayScreen(
             text = {
                 Column {
                     val head = when (mode) {
-                        TileMode.CLASSIC -> if (engine.hitTiles >= TileEngine.CLASSIC_TILES) "用时 ${fmtSec(engine.usedMs)}" else "打完 ${engine.hitTiles}/${TileEngine.CLASSIC_TILES} 块"
+                        TileMode.CLASSIC -> if (engine.hitTiles >= engine.totalNotes) "用时 ${fmtSec(engine.usedMs)}" else "打完 ${engine.hitTiles}/${engine.totalNotes} 块"
                         TileMode.ARCADE -> "得分 ${engine.score}"
                         TileMode.RELAY -> "最长连续 ${engine.relayMaxStreak} 段"
                     }
@@ -1352,6 +1488,38 @@ private fun rememberTilePalette(): TilePalette {
  * 没有判定线、没有高光/暗边/缺口——经典版就是「块触底就点」，底部即终点。
  * 所有坐标取整，保持硬边；命中即消失（经典反馈），漏块短暂泛红再消失。
  */
+/**
+ * 长按块「细黑线」上的流光：一段亮光沿线上循环流动（由头向尾 = 向上）。
+ *
+ * 纯绘制（不进重组、不影响逻辑），用**墙钟** bgMs 驱动 → 暂停/倒计时时也在动
+ * （与背景星星同一套时钟）。线太短（<10px）就不画，避免糊成一团。
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHoldFlow(
+    p: TilePalette,
+    lineX: Float,
+    lineW: Float,
+    tailY: Float,
+    headY: Float,
+    bgMs: Long,
+    periodMs: Long
+) {
+    val span = headY - tailY
+    if (span < 10f) return
+    val phase = ((bgMs % periodMs).toFloat() / periodMs.toFloat()).coerceIn(0f, 1f)
+    val ly = headY - span * phase
+    // 外发光 + 亮核，两段叠出"流光"感（像素硬边，不做模糊）
+    drawRect(
+        p.star.copy(alpha = 0.30f),
+        topLeft = Offset(lineX - 1.5f, ly - 5f),
+        size = Size(lineW + 3f, 10f)
+    )
+    drawRect(
+        p.star.copy(alpha = 0.92f),
+        topLeft = Offset(lineX - 0.5f, ly - 2.5f),
+        size = Size(lineW + 1f, 5f)
+    )
+}
+
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
     engine: TileEngine,
     p: TilePalette,
@@ -1443,22 +1611,76 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
         val boxW = (laneWi - 2).coerceAtLeast(8)
         val top = (y - noteH).toFloat()
 
-        // ── 长按块 ──
-        if (n.holdMs > 0L && (st == NoteState.PENDING || st == NoteState.HOLDING)) {
-            val barW = (boxW - 6).coerceAtLeast(4).toFloat()
-            val barX = laneX + 3f
+        // ── 长按块（2026-09-15 返工：不再画成一根粗黑长条）──
+        // 用户："长按块不用长黑块，设置一开始黑块后面用黑线，并且添加特效"
+        // 头部 = 普通黑方块（与普通块同尺寸，一眼看出"按这里"）；
+        // 后面（要按住的段落）= 一条**细黑线** + 线上循环跑的流光；
+        // 按满 = 头部爆闪一下（220ms）。
+        if (n.holdMs > 0L) {
+            // 线宽按轨道宽取比例（写死像素在 1440 宽屏上会看不见、在低分屏上又会过粗）。
+            // 0.045 实测太细（1080 屏上 12px、只有块宽的 1/22，像根头发）→ 0.085（≈23px）
+            // 仍明显是"一条线"（块宽的 1/11），但在手机上看得清流向
+            val lineW = (laneWi * 0.085f).coerceIn(6f, laneWi * 0.16f)
+            val lineX = laneX + (boxW - lineW) * 0.5f
+
+            // ① 按满：头部爆闪（"白光" + 一圈向外扩的方环）
+            if (st != NoteState.PENDING && st != NoteState.HOLDING && st != NoteState.MISS) {
+                val age = if (jAt > 0) nowRt - jAt else 999L
+                if (age < 220) {
+                    val k = age / 220f
+                    val cx = n.lane * laneWi + laneWi * 0.5f
+                    val cy = hitY - noteH * 0.35f
+                    val r = laneWi * (0.30f + 0.95f * k)
+                    val a = 1f - k
+                    // 方环用方块色（亮底=黑环、暗底=白环，两种主题都看得清）
+                    drawRect(
+                        p.block.copy(alpha = a * 0.85f),
+                        topLeft = Offset(cx - r, cy - r),
+                        size = Size(r * 2f, r * 2f),
+                        style = Stroke(width = 4f)
+                    )
+                    // 白光十字（爆闪本体）——先垫一层方块色描边：纯白在**亮底**上根本看不见
+                    // （预览图实测），垫边后亮底=白芯黑边、暗底=白芯，两种主题都读得出来
+                    val arm = 7f
+                    val armLen = r * 0.72f
+                    drawRect(
+                        p.block.copy(alpha = a * 0.9f),
+                        topLeft = Offset(cx - armLen, cy - arm),
+                        size = Size(armLen * 2f, arm * 2f)
+                    )
+                    drawRect(
+                        p.block.copy(alpha = a * 0.9f),
+                        topLeft = Offset(cx - arm, cy - armLen),
+                        size = Size(arm * 2f, armLen * 2f)
+                    )
+                    drawRect(
+                        Color.White.copy(alpha = a * 0.95f),
+                        topLeft = Offset(cx - armLen * 0.94f, cy - 2.5f),
+                        size = Size(armLen * 1.88f, 5f)
+                    )
+                    drawRect(
+                        Color.White.copy(alpha = a * 0.95f),
+                        topLeft = Offset(cx - 2.5f, cy - armLen * 0.94f),
+                        size = Size(5f, armLen * 1.88f)
+                    )
+                }
+                continue
+            }
+
             if (st == NoteState.HOLDING) {
-                // 按住中：头吸在判定线上，尾巴继续下落 → 条从头部被"吃掉"
+                // 按住中：头吸在判定线上，尾巴继续下落 → 线从头部被"吃掉"
                 val remainPx = (((n.timeMs + n.holdMs) - now) * pxPerMs).toFloat()
                 val tailY = hitY - remainPx
                 if (remainPx > 2f && tailY < h) {
+                    // 剩下要按的段落：细黑线
                     drawRect(
-                        p.hitLine.copy(alpha = 0.55f),
-                        topLeft = Offset(barX, tailY),
-                        size = Size(barW, (hitY - tailY).coerceAtLeast(2f))
+                        p.block.copy(alpha = 0.88f),
+                        topLeft = Offset(lineX, tailY),
+                        size = Size(lineW, (hitY - tailY).coerceAtLeast(1f))
                     )
+                    drawHoldFlow(p, lineX, lineW, tailY, hitY.toFloat(), bgMs, 420L)
                 }
-                // 判定线上的锚点：轻微脉动（用墙钟 bgMs，纯绘制，不影响逻辑）
+                // 判定线上的锚点：脉动（提示"手指还按着"）
                 val pulse = (0.72f + 0.28f * sin(bgMs / 120f)).coerceIn(0f, 1f)
                 drawRect(
                     p.block.copy(alpha = pulse),
@@ -1468,22 +1690,25 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTileField(
             } else {
                 val tailY = y - holdPx
                 if (tailY < h) {
-                    // 主体是一根"条"（比普通块窄），头部按普通块宽度加厚 → 一眼看出按点
+                    // 要按住的段落：细黑线
                     drawRect(
-                        p.block,
-                        topLeft = Offset(barX, tailY),
-                        size = Size(barW, holdPx.coerceAtLeast(2f))
+                        p.block.copy(alpha = 0.88f),
+                        topLeft = Offset(lineX, tailY),
+                        size = Size(lineW, holdPx.coerceAtLeast(1f))
                     )
+                    // 流光（沿线由头向尾流动：线是"活的"，一眼区分长按块与普通块）
+                    drawHoldFlow(p, lineX, lineW, tailY, y.toFloat(), bgMs, 700L)
+                    // 尾端亮线：提示"要按到这里"
+                    drawRect(
+                        p.hitLine.copy(alpha = 0.9f),
+                        topLeft = Offset(lineX - lineW * 0.4f, tailY),
+                        size = Size(lineW * 1.8f, 3f)
+                    )
+                    // 头部：普通黑方块（按点）
                     drawRect(
                         p.block,
                         topLeft = Offset(laneX.toFloat(), top),
                         size = Size(boxW.toFloat(), noteH.toFloat())
-                    )
-                    // 尾端一道亮线：提示"要按到这里"
-                    drawRect(
-                        p.hitLine.copy(alpha = 0.9f),
-                        topLeft = Offset(laneX.toFloat(), tailY),
-                        size = Size(boxW.toFloat(), 3f)
                     )
                 }
             }
