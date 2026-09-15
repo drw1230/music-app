@@ -130,6 +130,10 @@ object OnlineDownloader {
                         connectTimeout = 15000
                         readTimeout = 30000
                         setRequestProperty("User-Agent", "Mozilla/5.0")
+                        // ccMixter 直链有防盗链，缺 Referer 会 403（2026-09-15 实测）
+                        if (url.contains("ccmixter.org")) {
+                            setRequestProperty("Referer", "https://ccmixter.org/")
+                        }
                     }
                     if (conn.responseCode !in 200..299) {
                         conn.disconnect()

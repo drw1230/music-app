@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -43,15 +44,37 @@ fun SmartPlaylistScreen(
     onBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    // 当前板块：0=最常听 1=最近播放 2=冷门探索
-    var section by remember { mutableStateOf(0) }
+    // 当前板块：0=最常听 1=冷门探索（从曲库进入默认冷门探索；从播放页返回保留上次板块）
+    var section by remember { mutableStateOf(viewModel.smartSection) }
     // 冷门探索：平台冷门歌（在线），过滤本地/已听
-    var coldSongs by remember { mutableStateOf<List<OnlineSong>>(emptyList()) }
-    var coldLoading by remember { mutableStateOf(true) }
+    // 【会话缓存】初始值取自 ViewModel：从播放页返回时直接复用上次生成的歌单（不重新拉取）
+    var coldSongs by remember { mutableStateOf(viewModel.coldSessionSongs) }
+    var coldLoading by remember { mutableStateOf(viewModel.coldSessionSongs.isEmpty()) }
 
-    // 加载冷门探索（每次进入/刷新都重新生成：随机冷门歌单 → 每次不同）
+    // 列表滚动位置：从播放页返回时恢复（key=歌单本体 → 重新生成/刷新时归零回到顶部）
+    val coldListState = rememberPersistentListState(
+        key = viewModel.coldSessionSongs,
+        initialIndex = viewModel.coldScrollIndex,
+        initialOffset = viewModel.coldScrollOffset
+    ) { i, o ->
+        viewModel.coldScrollIndex = i
+        viewModel.coldScrollOffset = o
+    }
+    // 最常听：随播放次数动态变化，不参与"归零"（key 恒定 → 只在界面重建时按记忆恢复）
+    val topListState = rememberPersistentListState(
+        key = null,
+        initialIndex = viewModel.topScrollIndex,
+        initialOffset = viewModel.topScrollOffset
+    ) { i, o ->
+        viewModel.topScrollIndex = i
+        viewModel.topScrollOffset = o
+    }
+
+    // 加载冷门探索（只在「隔日首次进入」或用户点「刷新」时调用：随机冷门歌单 → 每次不同）
     suspend fun loadCold(shuffle: Boolean) {
         coldLoading = true
+        viewModel.coldScrollIndex = 0      // 新一批歌 → 列表从头开始
+        viewModel.coldScrollOffset = 0
         val keys = viewModel.listenedSongKeys()
         // 过滤本地/已听 + 上次推荐过的（每次进入刷新大半）+ 加大歌单池；
         // 过滤不足 20 首 → 只过滤本地/已听（不过滤上次），避免过滤清零导致空列表
@@ -82,9 +105,13 @@ fun SmartPlaylistScreen(
         coldSongs = (if (shuffle) playable.shuffled() else playable).take(50)
         // 记住本次推荐（下次进入过滤 → 刷新大半）；列表为空时不覆盖（避免过滤清零循环）
         if (coldSongs.isNotEmpty()) viewModel.rememberColdSongs(coldSongs)
+        // 写回会话缓存 + 记录生成日期：同一天内再进入直接复用，隔日或点「刷新」才重新生成
+        viewModel.coldSessionSongs = coldSongs
+        viewModel.coldSessionDate = viewModel.todayKey()
         coldLoading = false
     }
-    LaunchedEffect(Unit) { loadCold(false) }
+    // 只有"今天还没生成过"才拉取（隔日刷新）；从播放页返回、同一天内反复进出都不重新生成
+    LaunchedEffect(Unit) { if (!viewModel.coldSessionFresh()) loadCold(false) }
 
     // 各板块数据
     val topPlayed = viewModel.topPlayedSongs.take(50)
@@ -133,14 +160,14 @@ fun SmartPlaylistScreen(
                 label = "最常听",
                 icon = { Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(18.dp)) },
                 selected = section == 0,
-                onClick = { section = 0 },
+                onClick = { section = 0; viewModel.smartSection = 0 },
                 modifier = Modifier.weight(1f)
             )
             SectionButton(
                 label = "冷门探索",
                 icon = { Icon(Icons.Default.Explore, contentDescription = null, modifier = Modifier.size(18.dp)) },
                 selected = section == 1,
-                onClick = { section = 1 },
+                onClick = { section = 1; viewModel.smartSection = 1 },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -156,6 +183,7 @@ fun SmartPlaylistScreen(
                 onRefresh = {},
                 songs = topPlayed.map { it.first to "${it.second} 次 · ${it.first.artist}" },
                 viewModel = viewModel,
+                listState = topListState,
                 playAll = { topPlayed.map { it.first } }
             )
             else -> ColdSection(
@@ -163,6 +191,7 @@ fun SmartPlaylistScreen(
                 loading = coldLoading,
                 viewModel = viewModel,
                 scope = scope,
+                listState = coldListState,
                 onRefresh = { scope.launch { loadCold(shuffle = true) } }
             )
         }
@@ -214,6 +243,7 @@ private fun SongSection(
     onRefresh: () -> Unit,
     songs: List<Pair<Song, String>>,
     viewModel: MusicViewModel,
+    listState: LazyListState,
     playAll: () -> List<Song>
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -245,7 +275,7 @@ private fun SongSection(
         if (songs.isEmpty()) {
             EmptyHint()
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(modifier = Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 16.dp)) {
                 val now = viewModel.nowPlayingSong()
                 items(songs, key = { "${it.first.id}_${it.first.title}_${it.first.artist}" }) { (song, subtitleText) ->
                     val sectionSongs = playAll()
@@ -276,6 +306,7 @@ private fun ColdSection(
     loading: Boolean,
     viewModel: MusicViewModel,
     scope: kotlinx.coroutines.CoroutineScope,
+    listState: LazyListState,
     onRefresh: () -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -314,7 +345,7 @@ private fun ColdSection(
         } else if (songs.isEmpty()) {
             EmptyHint()
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(modifier = Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 16.dp)) {
                 val now = viewModel.nowPlayingSong()
                 items(songs, key = { "${it.platform}_${it.id}" }) { s ->
                     val tmp = Song(

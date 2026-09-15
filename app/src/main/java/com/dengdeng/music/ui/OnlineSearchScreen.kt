@@ -531,10 +531,12 @@ internal fun formatMs(ms: Long): String {
     return "%d:%02d".format(m, s)
 }
 
-/** 平台主题色：网易云红 / QQ 绿 / 酷狗蓝 */
+/** 平台主题色：网易云红 / QQ 绿 / 酷狗蓝 / 开放音源（Audius 紫 · ccMixter 橙） */
 internal fun platformColor(platform: String): Color = when (platform) {
     "网易云" -> Color(0xFFC20C0C)
     "QQ音乐" -> Color(0xFF31C27C)
     "酷狗" -> Color(0xFF2F7DF6)
+    "Audius" -> Color(0xFF7E1BCC)
+    "ccMixter" -> Color(0xFFE06C2A)
     else -> Color(0xFF666666)
 }

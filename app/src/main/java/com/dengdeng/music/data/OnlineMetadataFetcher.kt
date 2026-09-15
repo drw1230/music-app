@@ -90,6 +90,24 @@ object OnlineMetadataFetcher {
 
     private fun cacheKey(title: String, artist: String) = "$title|$artist".trim().lowercase()
 
+    // ════════════════ 开放音源（Audius / ccMixter，2026-09-15 接入）════════════════
+    // 选它们的原因：都是「创作者自主上传 / CC 授权」的合法源，**不需要 API key、
+    // 不需要账号、压根没有 VIP 概念** → 结构上不可能被锁死，适合当长期稳定的音源。
+    // 实测（2026-09-15）：Audius 搜索+取流 ✅（内容节点直连 206 audio/mpeg）、
+    // ccMixter 搜索+直链 ✅（但要带 Referer，见下）；Internet Archive 在国内不可达、Jamendo 需注册 key。
+    private const val AUDIUS_API = "https://api.audius.co/v1"
+    /** Audius 要求带 app_name 做标识（相当于 User-Agent，随便填，不是密钥） */
+    private const val AUDIUS_APP_NAME = "DDmusic"
+    /**
+     * ccMixter 的音频直链做防盗链：不带 Referer 一律 403 Forbidden（实测）。
+     * 所以这个 Referer 在「取流探测」和「真正播放/下载」时都必须带上 ——
+     * 播放侧见 PlaybackService 的 RefererDataSource，下载侧见 OnlineDownloader。
+     */
+    private const val CCMIXTER_REFERER = "https://ccmixter.org/"
+    /** 纯 CJK 查询直接跳过开放音源：Audius/ccMixter 上没有中文流行，搜了也是噪音，还白等 1~2 秒 */
+    private fun isCjkOnly(q: String): Boolean =
+        q.isNotBlank() && q.none { it.code < 128 && it.isLetterOrDigit() }
+
     /**
      * 清空在线搜索/音源相关缓存（"修复音源"用）
      * 场景：某首歌曾解析失败（VIP 受限/平台挂掉）被写进缓存 → 之后一直"播不了"；
@@ -410,6 +428,28 @@ object OnlineMetadataFetcher {
         }
     }
 
+    /** GET 并解析 JSON **数组**（ccMixter 的 query 接口返回的是数组，不是对象） */
+    private fun httpGetArray(url: URL): JSONArray? {
+        return try {
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                setRequestProperty("Accept", "application/json")
+            }
+            if (conn.responseCode != 200) {
+                conn.disconnect()
+                return null
+            }
+            val text = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
+            conn.disconnect()
+            JSONArray(text)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /** GET 请求（带 Referer，QQ 音乐接口需要）并解析 JSON */
     private fun httpGetWithHeaders(url: URL): JSONObject? {
         return try {
@@ -564,9 +604,159 @@ object OnlineMetadataFetcher {
             val k = "${s.title}|${s.artist}".lowercase()
             if (!dedup.containsKey(k)) dedup[k] = s
         }
-        val final = dedup.values.toList()
+        val merged = dedup.values.toMutableList()
+
+        // —— 开放音源（Audius / ccMixter）——
+        // 刻意**不并进**上面 CN 三平台的去重表：开放源的曲目与中文流行几乎不重合，
+        // 一旦被去重表吞掉就等于"明明有却搜不到"。所以单独按 platform|歌名|歌手 去重后追加到列表尾部。
+        // 纯中文查询直接跳过（Audius 上没有中文流行，搜了只有噪音 + 白等一次海外请求）。
+        if (!isCjkOnly(q)) {
+            val openSources = coroutineScope {
+                val a = async { runCatching { searchAudius(q, limit) }.getOrDefault(emptyList()) }
+                val c = async { runCatching { searchCcMixter(q, limit) }.getOrDefault(emptyList()) }
+                a.await() + c.await()
+            }
+            val seen = merged.map { "${it.platform}|${it.title}|${it.artist}".lowercase() }.toHashSet()
+            for (s in openSources) {
+                val k = "${s.platform}|${s.title}|${s.artist}".lowercase()
+                if (seen.add(k)) merged.add(s)
+            }
+        }
+
+        val final = merged
         if (final.isNotEmpty()) onlineSearchCache[key] = final
         return@withContext final
+    }
+
+    /**
+     * Audius 搜索（开放音源，无需 key）
+     * ⚠️ 必须过滤 `is_streamable == false`：这类曲目调 /stream 会直接 404 track not found（实测踩过）
+     */
+    private suspend fun searchAudius(query: String, limit: Int): List<OnlineSong> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<OnlineSong>()
+        try {
+            val url = URL(
+                "$AUDIUS_API/tracks/search?query=" + URLEncoder.encode(query, "UTF-8") +
+                    "&limit=$limit&app_name=$AUDIUS_APP_NAME"
+            )
+            val arr = httpGet(url)?.optJSONArray("data") ?: return@withContext out
+            for (i in 0 until arr.length()) {
+                val t = arr.optJSONObject(i) ?: continue
+                if (!t.optBoolean("is_streamable", false)) continue
+                val trackId = t.optLong("track_id", 0L)
+                if (trackId <= 0L) continue
+                val title = t.optString("title", "")
+                if (title.isBlank()) continue
+                val artwork = t.optJSONObject("artwork")
+                out.add(
+                    OnlineSong(
+                        platform = "Audius",
+                        id = trackId.toString(),
+                        title = title,
+                        artist = t.optJSONObject("user")?.optString("name", "") ?: "",
+                        album = t.optString("genre", ""),
+                        artUrl = artwork?.optString("480x480", null)?.takeIf { it.isNotBlank() }
+                            ?: artwork?.optString("150x150", null)?.takeIf { it.isNotBlank() },
+                        durationMs = t.optLong("duration", 0L) * 1000L
+                    )
+                )
+            }
+        } catch (e: Exception) { }
+        out
+    }
+
+    /**
+     * ccMixter 搜索（开放音源，无需 key）。曲库是 remix/创作素材，CC 授权。
+     * 直链放 `extra.url` 缓存起来 —— ccMixter 的直链不带签名、不过期，不用每次重解析。
+     */
+    private suspend fun searchCcMixter(query: String, limit: Int): List<OnlineSong> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<OnlineSong>()
+        try {
+            val url = URL(
+                "https://ccmixter.org/api/query?f=json&limit=$limit&search=" +
+                    URLEncoder.encode(query, "UTF-8")
+            )
+            val arr = httpGetArray(url) ?: return@withContext out
+            for (i in 0 until arr.length()) {
+                val t = arr.optJSONObject(i) ?: continue
+                val files = t.optJSONArray("files") ?: continue
+                // 一个 upload 往往挂多个文件（mp3/ogg/zip…），只认 audio/mpeg
+                var mp3: String? = null
+                var mp3Size = 0L
+                var ps = ""
+                for (j in 0 until files.length()) {
+                    val f = files.optJSONObject(j) ?: continue
+                    val fi = f.optJSONObject("file_format_info") ?: continue
+                    if (fi.optString("mime_type", "") != "audio/mpeg") continue
+                    val d = f.optString("download_url", "")
+                    if (d.isBlank()) continue
+                    mp3 = d
+                    mp3Size = f.optLong("file_filesize", 0L)
+                    ps = fi.optString("ps", "")
+                    break
+                }
+                if (mp3 == null) continue
+                val title = t.optString("upload_name", "").trim()
+                if (title.isBlank()) continue
+                val artist = t.optString("user_real_name", "").takeIf { it.isNotBlank() }
+                    ?: t.optString("user_name", "")
+                val license = t.optString("license_name", "")
+                val extra = JSONObject()
+                    .put("url", mp3)
+                    .put("size", mp3Size)
+                    .put("license", license)
+                    .put("page", t.optString("file_page_url", ""))
+                    .toString()
+                out.add(
+                    OnlineSong(
+                        platform = "ccMixter",
+                        id = t.optLong("upload_id", 0L).toString(),
+                        title = title,
+                        artist = artist,
+                        album = if (license.isBlank()) "ccMixter" else "ccMixter · $license",
+                        artUrl = null,
+                        durationMs = parsePsDuration(ps),
+                        extra = extra
+                    )
+                )
+            }
+        } catch (e: Exception) { }
+        out
+    }
+
+    /** ccMixter 时长字段 `ps` 形如 "2:33" 或 "1:02:33" */
+    private fun parsePsDuration(ps: String): Long {
+        if (ps.isBlank()) return 0L
+        return try {
+            var sec = 0L
+            for (p in ps.split(":")) sec = sec * 60L + p.trim().toLong()
+            sec * 1000L
+        } catch (e: Exception) { 0L }
+    }
+
+    /**
+     * Audius 取流：直接用 `no_redirect=true` 拿**最终内容节点 URL**。
+     * 不带 no_redirect 时会 302 到随机内容节点（域名不固定，遇到过 v.monophonic.digital），
+     * 让 ExoPlayer 跟着跳一次等于多一次跨主机握手，遇慢节点更容易超时 → 我们自己拿好再播。
+     */
+    private suspend fun audiusAudioUrl(trackId: String): String? = withContext(Dispatchers.IO) {
+        if (trackId.isBlank()) return@withContext null
+        try {
+            val url = URL("$AUDIUS_API/tracks/$trackId/stream?app_name=$AUDIUS_APP_NAME&no_redirect=true")
+            httpGet(url)?.optString("data", null)?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) { null }
+    }
+
+    /** ccMixter 音源（直链已在搜索时缓存进 extra.url；拿不到就返回空列表，不伪造 VIP 锁） */
+    private fun ccmixterAudioSource(song: OnlineSong): List<AudioSource> {
+        if (song.platform != "ccMixter") return emptyList()
+        val url = try {
+            JSONObject(song.extra.ifBlank { "{}" }).optString("url", "").takeIf { it.isNotBlank() }
+        } catch (e: Exception) { null } ?: return emptyList()
+        val size = try {
+            JSONObject(song.extra).optLong("size", 0L)
+        } catch (e: Exception) { 0L }
+        return listOf(AudioSource("ccMixter", "标准", "MP3", 128000, url, size, false))
     }
 
     /**
@@ -624,7 +814,21 @@ object OnlineMetadataFetcher {
                 } else emptyList()
             }
 
-            listOf(netease, qq, kugou).awaitAll().flatten()
+            // ===== 4. 开放音源（Audius / ccMixter）=====
+            // 这两个源本来就不需要登录、没有 VIP 档，所以解析不出 URL 时**直接返回空列表**，
+            // 而不是像网易云/QQ 那样吐一个 url=null+vip=true 的占位 —— 后者会让 UI 亮出
+            // 一把"需要 VIP"的锁，对免费源来说是纯粹的误报（用户 2026-09-15 反馈的正是这个锁）。
+            val open = async {
+                when (song.platform) {
+                    "Audius" -> audiusAudioUrl(song.id)?.let {
+                        listOf(AudioSource("Audius", "标准", "MP3", 128000, it, 0L, false))
+                    } ?: emptyList()
+                    "ccMixter" -> ccmixterAudioSource(song)
+                    else -> emptyList()
+                }
+            }
+
+            listOf(netease, qq, kugou, open).awaitAll().flatten()
         }
 
         sourceCache[cacheKey] = System.currentTimeMillis() to sources
@@ -1167,6 +1371,8 @@ object OnlineMetadataFetcher {
         url.contains("163.cn") || url.contains("music.163") || url.contains("126.net") -> "https://music.163.com"
         url.contains("y.qq.com") || url.contains("qq.com") -> "https://y.qq.com"
         url.contains("kugou.com") || url.contains("kgimg.com") || url.contains("krc") -> "https://www.kugou.com"
+        // ccMixter 直链有防盗链：必须带它自己的 Referer，带成别家的会直接 403
+        url.contains("ccmixter.org") -> CCMIXTER_REFERER
         else -> "https://music.163.com"
     }
 
@@ -1224,9 +1430,14 @@ object OnlineMetadataFetcher {
                     ?: kugouAudioSource(norm, "标准", "MP3", 128000, 0L, 1L)?.url
                 else kugouAudioSource(norm, "标准", "MP3", 128000, 0L, 1L)?.url
             }
+            "Audius" -> audiusAudioUrl(song.id)
+            "ccMixter" -> ccmixterAudioSource(song).firstOrNull()?.url
             else -> null
         }
         // 本平台解析失败（VIP 限制 / 未登录 / 版权下架）→ 酷狗兜底
-        direct ?: kugouFallbackUrl(song.title, song.artist)
+        // ⚠️ 只对 CN 三平台兜底：Audius/ccMixter 上根本没有中文流行，
+        //    拿它们的歌名去酷狗搜纯属白费一次请求，直接返回 null 即可
+        if (song.platform == "Audius" || song.platform == "ccMixter") direct
+        else direct ?: kugouFallbackUrl(song.title, song.artist)
     }
 }

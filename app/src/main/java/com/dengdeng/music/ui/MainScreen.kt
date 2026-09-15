@@ -437,16 +437,16 @@ fun MainScreen(
             !hasPermission -> OnlineOnlyView(
                 modifier = Modifier.padding(padding),
                 hasPermission = false,
-                onRadio = { showRadio = true },
-                onSmartPlaylist = { showSmartPlaylist = true },
+                onRadio = { viewModel.invalidateRadioSession(); showRadio = true },
+                onSmartPlaylist = { viewModel.smartSection = 1; showSmartPlaylist = true },
                 onSearch = { onlineSearchQuery = "" }
             )
             viewModel.isLoading -> LoadingView(Modifier.padding(padding))
             viewModel.songs.isEmpty() -> OnlineOnlyView(
                 modifier = Modifier.padding(padding),
                 hasPermission = true,
-                onRadio = { showRadio = true },
-                onSmartPlaylist = { showSmartPlaylist = true },
+                onRadio = { viewModel.invalidateRadioSession(); showRadio = true },
+                onSmartPlaylist = { viewModel.smartSection = 1; showSmartPlaylist = true },
                 onSearch = { onlineSearchQuery = "" }
             )
             else -> {
@@ -505,8 +505,8 @@ fun MainScreen(
                                 viewModel.addSearchHistory(q)
                                 onlineSearchQuery = q
                             },
-                            onRadio = { showRadio = true },
-                            onSmartPlaylist = { showSmartPlaylist = true },
+                            onRadio = { viewModel.invalidateRadioSession(); showRadio = true },
+                            onSmartPlaylist = { viewModel.smartSection = 1; showSmartPlaylist = true },
                             onGames = {
                                 // 已取名 → 直接进游戏中心；未取名 → 先弹取名框（取名后直接进）
                                 mainScope.launch {

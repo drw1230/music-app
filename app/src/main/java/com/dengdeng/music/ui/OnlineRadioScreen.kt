@@ -50,19 +50,31 @@ fun OnlineRadioScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var loading by remember { mutableStateOf(true) }
-    var songs by remember { mutableStateOf<List<OnlineSong>>(emptyList()) }
+    // 【会话缓存】初始值取自 ViewModel：从播放页返回时界面重新进入组合树，直接复用上次生成的歌单，
+    // 不再重新拉取（用户要求"点开具体歌曲的播放页，再返回电台页面不要刷新推荐歌曲"）
+    var loading by remember { mutableStateOf(viewModel.radioSessionSongs.isEmpty()) }
+    var songs by remember { mutableStateOf(viewModel.radioSessionSongs) }
     var error by remember { mutableStateOf(false) }
     // 电台播放状态："准备电台 x/30…" / null
     var radioState by remember { mutableStateOf<String?>(null) }
     // 是否已自动播放过（true=进入默认不自动播放，用户点"播放电台"才播；电台播完自动刷新时置 false 续播）
     var autoPlayed by remember { mutableStateOf(true) }
-    // 电台模式：false=探索版（平台热榜为主） true=熟悉版（已听 + 相似推荐）
-    var familiarMode by remember { mutableStateOf(false) }
+    // 电台模式：false=探索版（平台热榜为主） true=熟悉版（已听 + 相似推荐）；进入默认熟悉版
+    var familiarMode by remember { mutableStateOf(viewModel.radioSessionFamiliar) }
     // 探索版榜单轮换序号（点「刷新电台」递增，切到下一组榜单）
     var refreshRound by remember { mutableStateOf(0) }
     // 熟悉版：本地常听歌（已听过，直接入队无需解析 URL）
     var familiarLocalSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
+
+    // 歌曲列表滚动位置：从播放页返回时恢复（key=歌单本体 → 重新生成/刷新时归零回到顶部）
+    val listState = rememberPersistentListState(
+        key = viewModel.radioSessionSongs,
+        initialIndex = viewModel.radioScrollIndex,
+        initialOffset = viewModel.radioScrollOffset
+    ) { i, o ->
+        viewModel.radioScrollIndex = i
+        viewModel.radioScrollOffset = o
+    }
 
     /** 播放电台（并行解析 URL + 预检音源可播性 → 过滤坏音源后入队；熟悉版=本地已听 + 平台相似） */
     fun playRadio() {
@@ -104,9 +116,12 @@ fun OnlineRadioScreen(
     /** 加载电台（force=强制重新拉取；autoPlay=加载完成后自动播放——切模式用） */
     fun loadRadio(force: Boolean, autoPlay: Boolean = false) {
         scope.launch {
-            // 每次进入都重新生成（用户偏好：每次点进来歌要变；榜单轮换 + 过滤上次推荐）
+            // 从曲库进入时 ViewModel 已作废会话缓存 → 这里重新生成一批（用户偏好：每次点进来歌要变）
             loading = true
             error = false
+            viewModel.radioSessionFamiliar = familiarMode
+            viewModel.radioScrollIndex = 0     // 新一批歌 → 列表从头开始（不要把上次的滚动位置带过来）
+            viewModel.radioScrollOffset = 0
             val hot = if (familiarMode) {
                 // 熟悉版 v4：纯平台相似曲目（不要本地、不要相似歌手）+ 随机歌单混合
                 // 种子随机化（候选 8 抽 4）+ 每次随机歌单 → 每次打开歌不同
@@ -147,6 +162,8 @@ fun OnlineRadioScreen(
             }
             // 记住本次推荐（下次刷新过滤 → 大半新歌）；列表为空时不覆盖（避免过滤清零循环）
             if (songs.isNotEmpty()) viewModel.rememberRadioSongs(songs)
+            // 写回会话缓存：从播放页返回时界面直接复用这份歌单（不重新生成）
+            viewModel.radioSessionSongs = songs
             loading = false
             if (songs.isEmpty()) error = true
             else if (autoPlay) playRadio()   // 切模式后直接播新模式
@@ -154,7 +171,9 @@ fun OnlineRadioScreen(
     }
 
     LaunchedEffect(Unit) {
-        loadRadio(false)
+        // 会话缓存命中（如从播放页返回）→ 直接复用，不重新生成；
+        // 缓存为空（首次进入 / 刚从曲库点进来时被作废 / 上次生成失败）→ 重新生成
+        if (viewModel.radioSessionSongs.isEmpty()) loadRadio(false)
     }
 
     // 进入界面后自动开始播放（点击"每日电台"按钮即直接播放）
@@ -298,6 +317,7 @@ fun OnlineRadioScreen(
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
+                    state = listState,
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
                     items(songs, key = { "${it.platform}|${it.id}" }) { song ->

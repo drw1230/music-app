@@ -467,6 +467,57 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         } }.awaitAll().filter { it.first }.map { it.second }
     }
 
+    // ==================== 电台 / 智能歌单 会话缓存（2026-09-15） ====================
+    // 背景：MainScreen 打开播放页时 early-return（`if (showPlayer) { PlayerScreen; return }`），
+    // 电台/智能歌单界面会**离开组合树** → 界面内 remember 状态全丢、LaunchedEffect(Unit) 重跑
+    // → 从播放页返回时整张推荐歌单被重新生成（用户反馈"返回不要刷新"）。
+    // 解法：把"本次已生成的歌单"提升到 ViewModel（跨组合树存活），界面回来时直接复用。
+
+    /** 每日电台：本次会话已生成的推荐（非空 = 直接复用，不重新拉取） */
+    var radioSessionSongs by mutableStateOf<List<OnlineMetadataFetcher.OnlineSong>>(emptyList())
+
+    /** 每日电台：本次会话的模式（true=熟悉版；从曲库进入默认熟悉版） */
+    var radioSessionFamiliar by mutableStateOf(true)
+
+    /**
+     * 作废电台会话缓存（仅在「从曲库点每日电台入口」时调用 → 每次进入生成一批新歌，保持原有行为）。
+     * 从播放页返回**不**调用 → 列表原样保留。
+     */
+    fun invalidateRadioSession() {
+        radioSessionSongs = emptyList()
+        radioSessionFamiliar = true   // 每次从曲库进入默认熟悉版
+        radioScrollIndex = 0          // 新一批歌 → 列表从头开始
+        radioScrollOffset = 0
+    }
+
+    /** 智能歌单：当前板块（0=最常听 1=冷门探索）；从曲库进入默认冷门探索 */
+    var smartSection by mutableStateOf(1)
+
+    /** 冷门探索：本次生成的歌单 + 生成日期（"yyyy-MM-dd"）；同一天内不再重新生成 */
+    var coldSessionSongs by mutableStateOf<List<OnlineMetadataFetcher.OnlineSong>>(emptyList())
+    var coldSessionDate by mutableStateOf("")
+
+    // ---- 列表滚动位置（⚠️ 故意用**普通字段**而不是 mutableStateOf：滚动时读它不会触发重组）----
+    /** 每日电台列表滚动位置（从播放页返回时恢复，不回到顶部） */
+    var radioScrollIndex = 0
+    var radioScrollOffset = 0
+
+    /** 冷门探索列表滚动位置 */
+    var coldScrollIndex = 0
+    var coldScrollOffset = 0
+
+    /** 最常听列表滚动位置 */
+    var topScrollIndex = 0
+    var topScrollOffset = 0
+
+    /** 今天的日期键（yyyy-MM-dd，本地时区） */
+    fun todayKey(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+
+    /** 冷门探索歌单是否为今天生成的（true=直接复用；隔日或点刷新才重新生成） */
+    fun coldSessionFresh(): Boolean =
+        coldSessionSongs.isNotEmpty() && coldSessionDate == todayKey()
+
     /** 常听的本地歌曲（按播放次数倒序，供电台「熟悉版」作为"已听过的歌"直接入队） */
     fun topSongs(limit: Int = 10): List<Song> =
         playHistory.entries
