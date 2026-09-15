@@ -22,11 +22,21 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 必须用 v4：GitHub 自 2026-09 起把 node20 老 action 强制升到 node24 运行，
-      # android-actions/setup-android@v3 在 node24 下会直接报错（步骤 "Set up Android SDK" 失败，
-      # 后续步骤全部 skipped）。v4 是补上 node24 兼容的大版本。
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4.0.1
+      # 不再使用 android-actions/setup-android：GitHub 托管的 ubuntu-latest 镜像已预装
+      # 完整 Android SDK（ANDROID_HOME=/usr/local/lib/android/sdk，含 platforms;android-35
+      # 与 build-tools;35.0.0/35.0.1，JDK 17 亦为镜像默认）。
+      # 该 action 于 2026-09-15 起因 runner 把 node20 action 强制升到 node24 而失败（v3），
+      # 升到 v4.0.1 后仍在同一步失败，故直接移除，改为打印 SDK 现状以便排障。
+      - name: Verify Android SDK (preinstalled on runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo -n "platforms:   "; ls "$ANDROID_HOME/platforms" 2>/dev/null | tr '\n' ' '; echo
+          echo -n "build-tools: "; ls "$ANDROID_HOME/build-tools" 2>/dev/null | tr '\n' ' '; echo
+          echo -n "sdkmanager:  "; command -v sdkmanager || ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null || true; echo
+          if [ ! -d "$ANDROID_HOME/platforms/android-35" ]; then
+            echo "!! android-35 未预装，下一步会尝试安装"
+          fi
 
       # Gradle 依赖缓存：第二次及以后构建跳过依赖下载（7 分钟 → 3-4 分钟）
       - name: Cache Gradle dependencies
@@ -39,9 +49,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Install SDK 35 platform (if needed)
+      - name: Ensure SDK 35 platform (if needed)
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
+          if [ -d "$ANDROID_HOME/platforms/android-35" ]; then
+            echo "android-35 已预装，跳过"
+            exit 0
+          fi
+          SDK=$(command -v sdkmanager || ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          if [ -z "$SDK" ]; then
+            echo "!! android-35 缺失且找不到 sdkmanager"
+            exit 1
+          fi
+          yes | "$SDK" --licenses > /dev/null 2>&1 || true
+          "$SDK" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
