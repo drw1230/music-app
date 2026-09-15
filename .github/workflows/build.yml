@@ -22,8 +22,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # 必须用 v4：GitHub 自 2026-09 起把 node20 老 action 强制升到 node24 运行，
+      # android-actions/setup-android@v3 在 node24 下会直接报错（步骤 "Set up Android SDK" 失败，
+      # 后续步骤全部 skipped）。v4 是补上 node24 兼容的大版本。
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.1
 
       # Gradle 依赖缓存：第二次及以后构建跳过依赖下载（7 分钟 → 3-4 分钟）
       - name: Cache Gradle dependencies
